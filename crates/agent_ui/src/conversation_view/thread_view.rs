@@ -10535,6 +10535,11 @@ impl ThreadView {
                 .upgrade()
                 .and_then(|server_view| server_view.read(cx).as_connected())
                 .and_then(|connected| connected.threads.get(&session_id))
+                // An external agent can emit subagent_session_info that points
+                // back at a session already being rendered (a cycle). Reading
+                // that view here would double-lease the entity this render is
+                // running inside and panic; fall back to the no-thread card.
+                .filter(|view| view.entity_id() != cx.entity_id())
         });
 
         let content = self.render_subagent_card(
