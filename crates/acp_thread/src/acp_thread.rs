@@ -2335,6 +2335,19 @@ impl AcpThread {
         self.parent_session_id.as_ref()
     }
 
+    /// Marks this thread as a subagent of `parent_session_id`.
+    ///
+    /// The native in-process bridge passes the parent at construction (see
+    /// `crates/agent/src/agent.rs` `register_session`), but externally-loaded
+    /// subagent sessions are created via `session/load` before the UI knows the
+    /// parent, so `agent_ui` links them up once the load completes. This drives
+    /// the minimize-back titlebar, "Subagents Awaiting Permission" inclusion,
+    /// and the subagent-output divider, all of which read `parent_session_id`
+    /// at render/query time.
+    pub fn set_parent_session_id(&mut self, parent_session_id: Option<acp::SessionId>) {
+        self.parent_session_id = parent_session_id;
+    }
+
     pub fn prompt_capabilities(&self) -> acp::PromptCapabilities {
         self.prompt_capabilities.clone()
     }
@@ -3112,6 +3125,28 @@ impl AcpThread {
         cx.emit(AcpThreadEvent::Retry(status));
     }
 
+    /// Returns the subagent session id to announce via
+    /// [`AcpThreadEvent::SubagentSpawned`] when a tool call gains
+    /// `subagent_session_info` (transitioning from absent to present).
+    ///
+    /// Returns `None` when the info was already present (so we don't announce
+    /// the same subagent twice) or is still absent. The native in-process
+    /// bridge emits `SubagentSpawned` directly from the spawn tool
+    /// (see `crates/agent/src/tools/spawn_agent_tool.rs`); external ACP agents
+    /// instead deliver `subagent_session_info` inside a wire `session/update`,
+    /// so we detect the transition here and mirror the same announcement.
+    fn newly_spawned_subagent(
+        had_subagent_session: bool,
+        subagent_session_info: &Option<SubagentSessionInfo>,
+    ) -> Option<acp::SessionId> {
+        if had_subagent_session {
+            return None;
+        }
+        subagent_session_info
+            .as_ref()
+            .map(|info| info.session_id.clone())
+    }
+
     pub fn update_tool_call(
         &mut self,
         update: impl Into<ToolCallUpdate>,
@@ -3155,8 +3190,10 @@ impl AcpThread {
             unreachable!()
         };
 
+        let mut spawned_subagent = None;
         match update {
             ToolCallUpdate::UpdateFields(update) => {
+                let had_subagent_session = call.subagent_session_info.is_some();
                 let location_updated = update.fields.locations.is_some();
                 call.update_fields(
                     update.fields,
@@ -3166,6 +3203,8 @@ impl AcpThread {
                     &self.terminals,
                     cx,
                 )?;
+                spawned_subagent =
+                    Self::newly_spawned_subagent(had_subagent_session, &call.subagent_session_info);
                 if location_updated {
                     self.resolve_locations(update.tool_call_id, cx);
                 }
@@ -3182,6 +3221,9 @@ impl AcpThread {
         }
 
         cx.emit(AcpThreadEvent::EntryUpdated(ix));
+        if let Some(session_id) = spawned_subagent {
+            cx.emit(AcpThreadEvent::SubagentSpawned(session_id));
+        }
 
         Ok(())
     }
@@ -3230,6 +3272,7 @@ impl AcpThread {
                 unreachable!()
             };
 
+            let had_subagent_session = call.subagent_session_info.is_some();
             call.update_fields(
                 update.fields,
                 update.meta,
@@ -3239,8 +3282,13 @@ impl AcpThread {
                 cx,
             )?;
             call.update_status(status);
+            let spawned_subagent =
+                Self::newly_spawned_subagent(had_subagent_session, &call.subagent_session_info);
 
             cx.emit(AcpThreadEvent::EntryUpdated(ix));
+            if let Some(session_id) = spawned_subagent {
+                cx.emit(AcpThreadEvent::SubagentSpawned(session_id));
+            }
         } else {
             let call = ToolCall::from_acp(
                 update.try_into()?,
@@ -3250,7 +3298,14 @@ impl AcpThread {
                 &self.terminals,
                 cx,
             )?;
+            // A tool call may already carry `subagent_session_info` on its very
+            // first appearance (absent -> present), so announce it here too.
+            let spawned_subagent =
+                Self::newly_spawned_subagent(false, &call.subagent_session_info);
             self.push_entry(AgentThreadEntry::ToolCall(call), cx);
+            if let Some(session_id) = spawned_subagent {
+                cx.emit(AcpThreadEvent::SubagentSpawned(session_id));
+            }
         };
 
         self.resolve_locations(id, cx);
@@ -4822,6 +4877,31 @@ mod tests {
             serde_json::to_value(deserialized).expect("serialize client message id"),
             json!("client-id")
         );
+    }
+
+    #[test]
+    fn newly_spawned_subagent_only_fires_on_transition() {
+        let info = SubagentSessionInfo {
+            session_id: acp::SessionId::new("subagent-session"),
+            message_start_index: 0,
+            message_end_index: None,
+        };
+
+        // Absent -> present: announce the subagent.
+        assert_eq!(
+            AcpThread::newly_spawned_subagent(false, &Some(info.clone())),
+            Some(acp::SessionId::new("subagent-session"))
+        );
+
+        // Already present: don't announce again (guards double-loading).
+        assert_eq!(
+            AcpThread::newly_spawned_subagent(true, &Some(info.clone())),
+            None
+        );
+
+        // Still absent: nothing to announce.
+        assert_eq!(AcpThread::newly_spawned_subagent(false, &None), None);
+        assert_eq!(AcpThread::newly_spawned_subagent(true, &None), None);
     }
 
     fn init_test(cx: &mut TestAppContext) {

@@ -2076,6 +2076,15 @@ impl ConversationView {
                     return;
                 };
                 let subagent_session_id = subagent_thread.read(cx).session_id().clone();
+                // Externally-loaded subagent sessions are created via
+                // `session/load` without knowing their parent (the ACP
+                // `load_session` API has no parent parameter). Link them here so
+                // the minimize-back titlebar, "Subagents Awaiting Permission"
+                // strip, and subagent-output divider behave like native
+                // subagents, which receive the parent at construction.
+                subagent_thread.update(cx, |subagent_thread, _cx| {
+                    subagent_thread.set_parent_session_id(Some(parent_session_id.clone()));
+                });
                 conversation.update(cx, |conversation, cx| {
                     conversation.register_thread(subagent_thread.clone(), cx);
                 });
