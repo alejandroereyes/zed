@@ -48,6 +48,10 @@ pub struct EntryViewState {
     user_toggled_thinking_blocks: HashSet<(usize, usize)>,
     expanded_compactions: HashSet<usize>,
     expanded_tool_calls: HashSet<acp::ToolCallId>,
+    // A run of consecutive read/search tool calls renders as one "Explored N"
+    // group. The group is keyed by its first member's tool-call id (the anchor);
+    // presence here means the group is expanded to show the per-tool cards.
+    expanded_tool_groups: HashSet<acp::ToolCallId>,
 }
 
 impl EntryViewState {
@@ -70,11 +74,22 @@ impl EntryViewState {
             user_toggled_thinking_blocks: HashSet::default(),
             expanded_compactions: HashSet::default(),
             expanded_tool_calls: HashSet::default(),
+            expanded_tool_groups: HashSet::default(),
         }
     }
 
     pub(crate) fn is_tool_call_expanded(&self, tool_call_id: &acp::ToolCallId) -> bool {
         self.expanded_tool_calls.contains(tool_call_id)
+    }
+
+    pub(crate) fn is_tool_group_expanded(&self, anchor: &acp::ToolCallId) -> bool {
+        self.expanded_tool_groups.contains(anchor)
+    }
+
+    pub(crate) fn toggle_tool_group_expansion(&mut self, anchor: &acp::ToolCallId) {
+        if !self.expanded_tool_groups.remove(anchor) {
+            self.expanded_tool_groups.insert(anchor.clone());
+        }
     }
 
     pub(crate) fn expand_tool_call(&mut self, tool_call_id: acp::ToolCallId) {
