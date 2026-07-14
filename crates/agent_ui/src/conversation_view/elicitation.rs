@@ -1488,42 +1488,62 @@ impl<'a> ElicitationCard<'a> {
             _ => body,
         };
 
+        // Pending question forms drop the status header: settled forms are
+        // never rendered (see should_render_elicitation), so the header could
+        // only ever say "Waiting for input" — the focus-tinted border carries
+        // that signal instead, and the question text leads the card. URL
+        // elicitations keep the header; their status genuinely varies.
+        let is_form_pending = is_pending
+            && matches!(
+                &self.elicitation.request.mode,
+                acp::ElicitationMode::Form(_)
+            );
+
         v_flex()
             .mx_5()
             .my_1p5()
             .rounded_md()
             .border_1()
-            .border_color(border_color)
+            .border_color(if is_form_pending {
+                cx.theme().colors().border_focused.opacity(0.6)
+            } else {
+                border_color
+            })
             .overflow_hidden()
-            .child(
-                h_flex()
-                    .h_8()
-                    .p_1()
-                    .w_full()
-                    .justify_between()
-                    .bg(header_background)
-                    .child(
-                        h_flex()
-                            .min_w_0()
-                            .gap_1p5()
-                            .px_1()
-                            .child(
-                                Icon::new(status_icon)
-                                    .size(IconSize::Small)
-                                    .color(status_color),
-                            )
-                            .child(
-                                Label::new(format!("Input Requested by {}", self.requester_name))
+            .when(!is_form_pending, |this| {
+                this.child(
+                    h_flex()
+                        .h_8()
+                        .p_1()
+                        .w_full()
+                        .justify_between()
+                        .bg(header_background)
+                        .child(
+                            h_flex()
+                                .min_w_0()
+                                .gap_1p5()
+                                .px_1()
+                                .child(
+                                    Icon::new(status_icon)
+                                        .size(IconSize::Small)
+                                        .color(status_color),
+                                )
+                                .child(
+                                    Label::new(format!(
+                                        "Input Requested by {}",
+                                        self.requester_name
+                                    ))
                                     .size(LabelSize::Custom(tool_name_font_size))
                                     .truncate(),
-                            ),
-                    )
-                    .child(
-                        Label::new(status_label)
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                    ),
-            )
+                                ),
+                        )
+                        .child(
+                            Label::new(status_label)
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        ),
+                )
+            })
             .child(body)
             .when(is_pending || is_accepted_url, |this| {
                 this.child(self.render_actions(cx))
@@ -1720,7 +1740,11 @@ impl<'a> ElicitationCard<'a> {
                                 .gap_1p5()
                                 .rounded_sm()
                                 .border_1()
-                                .border_color(field_border_color.opacity(0.5))
+                                .border_color(if is_selected {
+                                    cx.theme().colors().border_focused.opacity(0.6)
+                                } else {
+                                    field_border_color.opacity(0.5)
+                                })
                                 .bg(row_background)
                                 .px_2()
                                 .py_1()
@@ -1787,7 +1811,11 @@ impl<'a> ElicitationCard<'a> {
                     .gap_1p5()
                     .rounded_sm()
                     .border_1()
-                    .border_color(border_color.opacity(0.5))
+                    .border_color(if is_selected {
+                        cx.theme().colors().border_focused.opacity(0.6)
+                    } else {
+                        border_color.opacity(0.5)
+                    })
                     .bg(row_background)
                     .px_2()
                     .py_1()
@@ -1836,7 +1864,7 @@ impl<'a> ElicitationCard<'a> {
     fn option_row_background(is_selected: bool, cx: &App) -> Hsla {
         let editor_background = cx.theme().colors().editor_background;
         if is_selected {
-            editor_background.blend(Color::Accent.color(cx).opacity(0.08))
+            editor_background.blend(cx.theme().colors().border_focused.opacity(0.1))
         } else {
             editor_background
         }
@@ -1845,7 +1873,7 @@ impl<'a> ElicitationCard<'a> {
     fn option_row_hover_background(is_selected: bool, cx: &App) -> Hsla {
         let editor_background = cx.theme().colors().editor_background;
         if is_selected {
-            editor_background.blend(Color::Accent.color(cx).opacity(0.1))
+            editor_background.blend(cx.theme().colors().border_focused.opacity(0.14))
         } else {
             cx.theme()
                 .colors()
@@ -1967,47 +1995,68 @@ impl<'a> ElicitationCard<'a> {
         let cancel_id = self.elicitation.id.clone();
         let dismiss_id = self.elicitation.id.clone();
 
+        // Question forms lead with a filled Submit at the reading edge and no
+        // divider, so the actions read as part of the form; URL consents keep
+        // the trailing icon-button row.
+        let is_form = open_url.is_none();
+
+        let accept_button = {
+            let button = Button::new(("elicitation-accept", self.entry_ix), accept_label)
+                .label_size(LabelSize::Small);
+            let button = if is_form {
+                button.style(ButtonStyle::Filled)
+            } else {
+                button.start_icon(
+                    Icon::new(accept_icon)
+                        .size(IconSize::XSmall)
+                        .color(accept_icon_color),
+                )
+            };
+            button.on_click(move |_, window, cx| {
+                if let Some(url) = &open_url {
+                    on_open_url(submit_id.clone(), url.clone(), window, cx);
+                    if !is_accepted_url {
+                        on_submit(submit_id.clone(), window, cx);
+                    }
+                } else {
+                    on_submit(submit_id.clone(), window, cx);
+                }
+            })
+        };
+
+        let decline_button = {
+            let button = Button::new(("elicitation-decline", self.entry_ix), "Decline")
+                .label_size(LabelSize::Small);
+            let button = if is_form {
+                button
+            } else {
+                button.start_icon(
+                    Icon::new(IconName::Close)
+                        .size(IconSize::XSmall)
+                        .color(Color::Error),
+                )
+            };
+            button.on_click(move |_, window, cx| {
+                on_decline(decline_id.clone(), window, cx);
+            })
+        };
+
         h_flex()
             .w_full()
-            .p_1()
-            .gap_1()
-            .justify_end()
-            .border_t_1()
-            .border_color(border_color)
-            .child(
-                Button::new(("elicitation-accept", self.entry_ix), accept_label)
-                    .start_icon(
-                        Icon::new(accept_icon)
-                            .size(IconSize::XSmall)
-                            .color(accept_icon_color),
-                    )
-                    .label_size(LabelSize::Small)
-                    .disabled(is_submitting)
-                    .on_click(move |_, window, cx| {
-                        if let Some(url) = &open_url {
-                            on_open_url(submit_id.clone(), url.clone(), window, cx);
-                            if !is_accepted_url {
-                                on_submit(submit_id.clone(), window, cx);
-                            }
-                        } else {
-                            on_submit(submit_id.clone(), window, cx);
-                        }
-                    }),
-            )
+            .map(|this| {
+                if is_form {
+                    this.px_3().pb_2p5().gap_1p5().justify_start()
+                } else {
+                    this.p_1()
+                        .gap_1()
+                        .justify_end()
+                        .border_t_1()
+                        .border_color(border_color)
+                }
+            })
+            .child(accept_button.disabled(is_submitting))
             .when(!is_accepted_url, |this| {
-                this.child(
-                    Button::new(("elicitation-decline", self.entry_ix), "Decline")
-                        .start_icon(
-                            Icon::new(IconName::Close)
-                                .size(IconSize::XSmall)
-                                .color(Color::Error),
-                        )
-                        .label_size(LabelSize::Small)
-                        .on_click(move |_, window, cx| {
-                            on_decline(decline_id.clone(), window, cx);
-                        }),
-                )
-                .child(
+                this.child(decline_button).child(
                     Button::new(("elicitation-cancel", self.entry_ix), "Cancel")
                         .label_size(LabelSize::Small)
                         .on_click(move |_, window, cx| {
