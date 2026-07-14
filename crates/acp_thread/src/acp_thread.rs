@@ -349,6 +349,11 @@ pub enum AssistantMessageChunk {
     Thought {
         id: Option<acp::MessageId>,
         block: ContentBlock,
+        /// Set while the thought streams during a live turn and taken when the
+        /// next activity settles it into `duration`. Replayed history never
+        /// gets a start time, so it never reports a bogus sub-second duration.
+        started_at: Option<Instant>,
+        duration: Option<Duration>,
     },
 }
 
@@ -2778,6 +2783,13 @@ impl AcpThread {
         cx: &mut Context<Self>,
     ) {
         let path_style = self.project.read(cx).path_style(cx);
+        // Thoughts are only timed during a live turn; replayed history streams
+        // in far faster than it was produced and must not report durations.
+        let thought_started_at = (is_thought && self.status() == ThreadStatus::Generating)
+            .then(Instant::now);
+        if !is_thought {
+            self.settle_streaming_thought(cx);
+        }
 
         // For text chunks going to an existing Markdown block, buffer for smooth
         // streaming instead of appending all at once which may feel more choppy.
@@ -2817,6 +2829,7 @@ impl AcpThread {
                     Some(AssistantMessageChunk::Thought {
                         id: existing_id,
                         block,
+                        ..
                     }),
                     true,
                 ) if can_merge_message_chunks(existing_id.as_ref(), message_id.as_ref()) => {
@@ -2831,6 +2844,8 @@ impl AcpThread {
                         chunks.push(AssistantMessageChunk::Thought {
                             id: message_id,
                             block,
+                            started_at: thought_started_at,
+                            duration: None,
                         })
                     } else {
                         chunks.push(AssistantMessageChunk::Message {
@@ -2846,6 +2861,8 @@ impl AcpThread {
                 AssistantMessageChunk::Thought {
                     id: message_id,
                     block,
+                    started_at: thought_started_at,
+                    duration: None,
                 }
             } else {
                 AssistantMessageChunk::Message {
@@ -2862,6 +2879,23 @@ impl AcpThread {
                 }),
                 cx,
             );
+        }
+    }
+
+    /// Any activity other than more of the same thought marks the end of a
+    /// streaming thought: record how long it ran so the UI can label it.
+    fn settle_streaming_thought(&mut self, cx: &mut Context<Self>) {
+        let entries_len = self.entries.len();
+        if let Some(AgentThreadEntry::AssistantMessage(message)) = self.entries.last_mut()
+            && let Some(AssistantMessageChunk::Thought {
+                started_at,
+                duration,
+                ..
+            }) = message.chunks.last_mut()
+            && let Some(started_at) = started_at.take()
+        {
+            *duration = Some(started_at.elapsed());
+            cx.emit(AcpThreadEvent::EntryUpdated(entries_len - 1));
         }
     }
 
@@ -2892,6 +2926,7 @@ impl AcpThread {
                     AssistantMessageChunk::Thought {
                         id: existing_id,
                         block: ContentBlock::Markdown { markdown },
+                        ..
                     },
                     true,
                 ) if can_merge_message_chunks(existing_id.as_ref(), message_id) => {
@@ -3234,6 +3269,7 @@ impl AcpThread {
         status: ToolCallStatus,
         cx: &mut Context<Self>,
     ) -> Result<(), acp::Error> {
+        self.settle_streaming_thought(cx);
         let language_registry = self.project.read(cx).languages().clone();
         let path_style = self.project.read(cx).path_style(cx);
         let id = update.tool_call_id.clone();
@@ -3620,6 +3656,7 @@ impl AcpThread {
     }
 
     pub fn update_plan(&mut self, request: acp::Plan, cx: &mut Context<Self>) {
+        self.settle_streaming_thought(cx);
         let new_entries_len = request.entries.len();
         let mut new_entries = request.entries.into_iter();
 
@@ -3822,6 +3859,9 @@ impl AcpThread {
                 // state even when the send_task is cancelled before tx.send().
                 if is_same_turn {
                     this.running_turn.take();
+                    // A turn that ends on a trailing thought (e.g. a refusal)
+                    // still needs that thought's duration recorded.
+                    this.settle_streaming_thought(cx);
                 }
 
                 let Ok(response) = response else {
@@ -3945,6 +3985,7 @@ impl AcpThread {
 
     pub fn cancel(&mut self, cx: &mut Context<Self>) -> Task<()> {
         Self::flush_streaming_text(&mut self.streaming_text_buffer, cx);
+        self.settle_streaming_thought(cx);
         self.cancel_outstanding_elicitations(cx);
 
         let Some(turn) = self.running_turn.take() else {
@@ -5803,7 +5844,13 @@ mod tests {
             };
             assert_eq!(message.chunks.len(), 4);
 
-            let AssistantMessageChunk::Thought { id, block } = &message.chunks[0] else {
+            let AssistantMessageChunk::Thought {
+                id,
+                block,
+                started_at,
+                duration,
+            } = &message.chunks[0]
+            else {
                 panic!("expected first chunk to be a thought")
             };
             assert_eq!(block.to_markdown(cx), "Thinking hard");
@@ -5811,8 +5858,13 @@ mod tests {
                 id.as_ref().map(ToString::to_string).as_deref(),
                 Some("msg_thought_1")
             );
+            // No turn is running here, matching a session/load replay: the
+            // thought must not be timed, or history would report bogus
+            // sub-second durations.
+            assert_eq!(*started_at, None);
+            assert_eq!(*duration, None);
 
-            let AssistantMessageChunk::Thought { id, block } = &message.chunks[1] else {
+            let AssistantMessageChunk::Thought { id, block, .. } = &message.chunks[1] else {
                 panic!("expected second chunk to be a thought")
             };
             assert_eq!(block.to_markdown(cx), "A separate thought");
