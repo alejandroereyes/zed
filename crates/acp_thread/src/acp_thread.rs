@@ -349,6 +349,11 @@ pub enum AssistantMessageChunk {
     Thought {
         id: Option<acp::MessageId>,
         block: ContentBlock,
+        /// Set while the thought streams during a live turn and taken when the
+        /// next activity settles it into `duration`. Replayed history never
+        /// gets a start time, so it never reports a bogus sub-second duration.
+        started_at: Option<Instant>,
+        duration: Option<Duration>,
     },
 }
 
@@ -2324,6 +2329,19 @@ impl AcpThread {
         self.parent_session_id.as_ref()
     }
 
+    /// Marks this thread as a subagent of `parent_session_id`.
+    ///
+    /// The native in-process bridge passes the parent at construction (see
+    /// `crates/agent/src/agent.rs` `register_session`), but externally-loaded
+    /// subagent sessions are created via `session/load` before the UI knows the
+    /// parent, so `agent_ui` links them up once the load completes. This drives
+    /// the minimize-back titlebar, "Subagents Awaiting Permission" inclusion,
+    /// and the subagent-output divider, all of which read `parent_session_id`
+    /// at render/query time.
+    pub fn set_parent_session_id(&mut self, parent_session_id: Option<acp::SessionId>) {
+        self.parent_session_id = parent_session_id;
+    }
+
     pub fn prompt_capabilities(&self) -> acp::PromptCapabilities {
         self.prompt_capabilities.clone()
     }
@@ -2765,6 +2783,13 @@ impl AcpThread {
         cx: &mut Context<Self>,
     ) {
         let path_style = self.project.read(cx).path_style(cx);
+        // Thoughts are only timed during a live turn; replayed history streams
+        // in far faster than it was produced and must not report durations.
+        let thought_started_at = (is_thought && self.status() == ThreadStatus::Generating)
+            .then(Instant::now);
+        if !is_thought {
+            self.settle_streaming_thought(cx);
+        }
 
         // For text chunks going to an existing Markdown block, buffer for smooth
         // streaming instead of appending all at once which may feel more choppy.
@@ -2804,6 +2829,7 @@ impl AcpThread {
                     Some(AssistantMessageChunk::Thought {
                         id: existing_id,
                         block,
+                        ..
                     }),
                     true,
                 ) if can_merge_message_chunks(existing_id.as_ref(), message_id.as_ref()) => {
@@ -2818,6 +2844,8 @@ impl AcpThread {
                         chunks.push(AssistantMessageChunk::Thought {
                             id: message_id,
                             block,
+                            started_at: thought_started_at,
+                            duration: None,
                         })
                     } else {
                         chunks.push(AssistantMessageChunk::Message {
@@ -2833,6 +2861,8 @@ impl AcpThread {
                 AssistantMessageChunk::Thought {
                     id: message_id,
                     block,
+                    started_at: thought_started_at,
+                    duration: None,
                 }
             } else {
                 AssistantMessageChunk::Message {
@@ -2849,6 +2879,23 @@ impl AcpThread {
                 }),
                 cx,
             );
+        }
+    }
+
+    /// Any activity other than more of the same thought marks the end of a
+    /// streaming thought: record how long it ran so the UI can label it.
+    fn settle_streaming_thought(&mut self, cx: &mut Context<Self>) {
+        let entries_len = self.entries.len();
+        if let Some(AgentThreadEntry::AssistantMessage(message)) = self.entries.last_mut()
+            && let Some(AssistantMessageChunk::Thought {
+                started_at,
+                duration,
+                ..
+            }) = message.chunks.last_mut()
+            && let Some(started_at) = started_at.take()
+        {
+            *duration = Some(started_at.elapsed());
+            cx.emit(AcpThreadEvent::EntryUpdated(entries_len - 1));
         }
     }
 
@@ -2879,6 +2926,7 @@ impl AcpThread {
                     AssistantMessageChunk::Thought {
                         id: existing_id,
                         block: ContentBlock::Markdown { markdown },
+                        ..
                     },
                     true,
                 ) if can_merge_message_chunks(existing_id.as_ref(), message_id) => {
@@ -3101,6 +3149,28 @@ impl AcpThread {
         cx.emit(AcpThreadEvent::Retry(status));
     }
 
+    /// Returns the subagent session id to announce via
+    /// [`AcpThreadEvent::SubagentSpawned`] when a tool call gains
+    /// `subagent_session_info` (transitioning from absent to present).
+    ///
+    /// Returns `None` when the info was already present (so we don't announce
+    /// the same subagent twice) or is still absent. The native in-process
+    /// bridge emits `SubagentSpawned` directly from the spawn tool
+    /// (see `crates/agent/src/tools/spawn_agent_tool.rs`); external ACP agents
+    /// instead deliver `subagent_session_info` inside a wire `session/update`,
+    /// so we detect the transition here and mirror the same announcement.
+    fn newly_spawned_subagent(
+        had_subagent_session: bool,
+        subagent_session_info: &Option<SubagentSessionInfo>,
+    ) -> Option<acp::SessionId> {
+        if had_subagent_session {
+            return None;
+        }
+        subagent_session_info
+            .as_ref()
+            .map(|info| info.session_id.clone())
+    }
+
     pub fn update_tool_call(
         &mut self,
         update: impl Into<ToolCallUpdate>,
@@ -3144,8 +3214,10 @@ impl AcpThread {
             unreachable!()
         };
 
+        let mut spawned_subagent = None;
         match update {
             ToolCallUpdate::UpdateFields(update) => {
+                let had_subagent_session = call.subagent_session_info.is_some();
                 let location_updated = update.fields.locations.is_some();
                 call.update_fields(
                     update.fields,
@@ -3155,6 +3227,8 @@ impl AcpThread {
                     &self.terminals,
                     cx,
                 )?;
+                spawned_subagent =
+                    Self::newly_spawned_subagent(had_subagent_session, &call.subagent_session_info);
                 if location_updated {
                     self.resolve_locations(update.tool_call_id, cx);
                 }
@@ -3171,6 +3245,9 @@ impl AcpThread {
         }
 
         cx.emit(AcpThreadEvent::EntryUpdated(ix));
+        if let Some(session_id) = spawned_subagent {
+            cx.emit(AcpThreadEvent::SubagentSpawned(session_id));
+        }
 
         Ok(())
     }
@@ -3192,6 +3269,7 @@ impl AcpThread {
         status: ToolCallStatus,
         cx: &mut Context<Self>,
     ) -> Result<(), acp::Error> {
+        self.settle_streaming_thought(cx);
         let language_registry = self.project.read(cx).languages().clone();
         let path_style = self.project.read(cx).path_style(cx);
         let id = update.tool_call_id.clone();
@@ -3219,6 +3297,7 @@ impl AcpThread {
                 unreachable!()
             };
 
+            let had_subagent_session = call.subagent_session_info.is_some();
             call.update_fields(
                 update.fields,
                 update.meta,
@@ -3228,8 +3307,13 @@ impl AcpThread {
                 cx,
             )?;
             call.update_status(status);
+            let spawned_subagent =
+                Self::newly_spawned_subagent(had_subagent_session, &call.subagent_session_info);
 
             cx.emit(AcpThreadEvent::EntryUpdated(ix));
+            if let Some(session_id) = spawned_subagent {
+                cx.emit(AcpThreadEvent::SubagentSpawned(session_id));
+            }
         } else {
             let call = ToolCall::from_acp(
                 update.try_into()?,
@@ -3239,7 +3323,14 @@ impl AcpThread {
                 &self.terminals,
                 cx,
             )?;
+            // A tool call may already carry `subagent_session_info` on its very
+            // first appearance (absent -> present), so announce it here too.
+            let spawned_subagent =
+                Self::newly_spawned_subagent(false, &call.subagent_session_info);
             self.push_entry(AgentThreadEntry::ToolCall(call), cx);
+            if let Some(session_id) = spawned_subagent {
+                cx.emit(AcpThreadEvent::SubagentSpawned(session_id));
+            }
         };
 
         self.resolve_locations(id, cx);
@@ -3565,6 +3656,7 @@ impl AcpThread {
     }
 
     pub fn update_plan(&mut self, request: acp::Plan, cx: &mut Context<Self>) {
+        self.settle_streaming_thought(cx);
         let new_entries_len = request.entries.len();
         let mut new_entries = request.entries.into_iter();
 
@@ -3767,6 +3859,9 @@ impl AcpThread {
                 // state even when the send_task is cancelled before tx.send().
                 if is_same_turn {
                     this.running_turn.take();
+                    // A turn that ends on a trailing thought (e.g. a refusal)
+                    // still needs that thought's duration recorded.
+                    this.settle_streaming_thought(cx);
                 }
 
                 let Ok(response) = response else {
@@ -3890,6 +3985,7 @@ impl AcpThread {
 
     pub fn cancel(&mut self, cx: &mut Context<Self>) -> Task<()> {
         Self::flush_streaming_text(&mut self.streaming_text_buffer, cx);
+        self.settle_streaming_thought(cx);
         self.cancel_outstanding_elicitations(cx);
 
         let Some(turn) = self.running_turn.take() else {
@@ -4790,6 +4886,31 @@ mod tests {
             serde_json::to_value(deserialized).expect("serialize client message id"),
             json!("client-id")
         );
+    }
+
+    #[test]
+    fn newly_spawned_subagent_only_fires_on_transition() {
+        let info = SubagentSessionInfo {
+            session_id: acp::SessionId::new("subagent-session"),
+            message_start_index: 0,
+            message_end_index: None,
+        };
+
+        // Absent -> present: announce the subagent.
+        assert_eq!(
+            AcpThread::newly_spawned_subagent(false, &Some(info.clone())),
+            Some(acp::SessionId::new("subagent-session"))
+        );
+
+        // Already present: don't announce again (guards double-loading).
+        assert_eq!(
+            AcpThread::newly_spawned_subagent(true, &Some(info.clone())),
+            None
+        );
+
+        // Still absent: nothing to announce.
+        assert_eq!(AcpThread::newly_spawned_subagent(false, &None), None);
+        assert_eq!(AcpThread::newly_spawned_subagent(true, &None), None);
     }
 
     fn init_test(cx: &mut TestAppContext) {
@@ -5723,7 +5844,13 @@ mod tests {
             };
             assert_eq!(message.chunks.len(), 4);
 
-            let AssistantMessageChunk::Thought { id, block } = &message.chunks[0] else {
+            let AssistantMessageChunk::Thought {
+                id,
+                block,
+                started_at,
+                duration,
+            } = &message.chunks[0]
+            else {
                 panic!("expected first chunk to be a thought")
             };
             assert_eq!(block.to_markdown(cx), "Thinking hard");
@@ -5731,8 +5858,13 @@ mod tests {
                 id.as_ref().map(ToString::to_string).as_deref(),
                 Some("msg_thought_1")
             );
+            // No turn is running here, matching a session/load replay: the
+            // thought must not be timed, or history would report bogus
+            // sub-second durations.
+            assert_eq!(*started_at, None);
+            assert_eq!(*duration, None);
 
-            let AssistantMessageChunk::Thought { id, block } = &message.chunks[1] else {
+            let AssistantMessageChunk::Thought { id, block, .. } = &message.chunks[1] else {
                 panic!("expected second chunk to be a thought")
             };
             assert_eq!(block.to_markdown(cx), "A separate thought");

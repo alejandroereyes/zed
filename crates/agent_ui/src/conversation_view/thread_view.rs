@@ -6120,8 +6120,8 @@ impl ThreadView {
                             .relative()
                             .child(
                                 div()
-                                    .py_3()
-                                    .px_2()
+                                    .py_2()
+                                    .px_3()
                                     .rounded_md()
                                     .bg(cx.theme().colors().editor_background)
                                     .border_1()
@@ -6261,7 +6261,13 @@ impl ThreadView {
                                     )
                                 })
                             }
-                            AssistantMessageChunk::Thought { block, .. } => {
+                            AssistantMessageChunk::Thought {
+                                block,
+                                started_at,
+                                duration,
+                                ..
+                            } => {
+                                let label = thinking_block_label(*started_at, *duration);
                                 block.markdown().and_then(|md| {
                                     let this_is_blank = md.read(cx).source().trim().is_empty();
                                     is_blank = is_blank && this_is_blank;
@@ -6272,6 +6278,7 @@ impl ThreadView {
                                         self.render_thinking_block(
                                             entry_ix,
                                             chunk_ix,
+                                            label.clone(),
                                             md.clone(),
                                             window,
                                             cx,
@@ -6289,7 +6296,7 @@ impl ThreadView {
                 } else {
                     v_flex()
                         .px_5()
-                        .py_1p5()
+                        .py_2()
                         .when(is_last, |this| this.pb_4())
                         .w_full()
                         .text_ui(cx)
@@ -7267,6 +7274,7 @@ impl ThreadView {
         &self,
         entry_ix: usize,
         chunk_ix: usize,
+        label: SharedString,
         chunk: Entity<Markdown>,
         window: &Window,
         cx: &Context<Self>,
@@ -7315,7 +7323,7 @@ impl ThreadView {
                                 div()
                                     .text_size(self.tool_name_font_size())
                                     .text_color(cx.theme().colors().text_muted)
-                                    .child("Thinking"),
+                                    .child(label),
                             ),
                     )
                     .child(
@@ -7349,7 +7357,18 @@ impl ThreadView {
                                 .overflow_hidden()
                                 .child(self.render_markdown(
                                     chunk,
-                                    MarkdownStyle::themed(MarkdownFont::Agent, window, cx),
+                                    {
+                                        // Italicize thought text so it reads as an
+                                        // aside rather than part of the answer.
+                                        let mut style = MarkdownStyle::themed(
+                                            MarkdownFont::Agent,
+                                            window,
+                                            cx,
+                                        );
+                                        style.base_text_style.font_style =
+                                            gpui::FontStyle::Italic;
+                                        style
+                                    },
                                     cx,
                                 )),
                         )
@@ -7715,8 +7734,7 @@ impl ThreadView {
 
         let working_dir = working_dir
             .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "current directory".to_string());
+            .map(|path| path.display().to_string());
 
         let command_element = self.render_collapsible_command(
             header_group.clone(),
@@ -7726,10 +7744,21 @@ impl ThreadView {
             cx,
         );
 
-        let is_expanded = self
-            .entry_view_state
-            .read(cx)
-            .is_tool_call_expanded(&tool_call.id);
+        let command_source = tool_call.label.read(cx).source().to_string();
+        let command_summary = crate::ui::command_summary_chip(
+            command_source
+                .strip_prefix("```\n")
+                .and_then(|s| s.strip_suffix("\n```"))
+                .unwrap_or(&command_source),
+        );
+
+        // A pending confirmation must always show the command being approved,
+        // regardless of the card's collapsed state.
+        let is_expanded = needs_confirmation
+            || self
+                .entry_view_state
+                .read(cx)
+                .is_tool_call_expanded(&tool_call.id);
 
         let truncated_tooltip = truncated_output.then(|| {
             if let Some(output) = output {
@@ -7752,13 +7781,19 @@ impl ThreadView {
             }
         });
 
-        let header = TerminalToolHeader::new(
+        let mut header = TerminalToolHeader::new(
             terminal.entity_id().to_string(),
             header_group,
-            working_dir,
             is_expanded,
-        )
-        .elapsed(time_elapsed)
+        );
+        if let Some(working_dir) = working_dir {
+            header = header.working_dir(working_dir);
+        }
+        if let Some(command_summary) = command_summary {
+            header = header.command_summary(command_summary);
+        }
+        let header = header
+            .elapsed(time_elapsed)
         .running(!command_finished && !needs_confirmation)
         .on_toggle_expand(cx.listener({
             let id = tool_call.id.clone();
@@ -7804,12 +7839,20 @@ impl ThreadView {
 
         v_flex()
             .when(layout == ToolCallLayout::Standalone, |this| {
-                this.my_1p5()
-                    .mx_5()
-                    .border_1()
-                    .when(tool_failed || command_failed, |card| card.border_dashed())
-                    .border_color(border_color)
-                    .rounded_md()
+                this.mx_5().map(|this| {
+                    // Collapsed terminal calls read as flat activity lines,
+                    // like read/search rows; the card chrome belongs to the
+                    // expanded view.
+                    if is_expanded {
+                        this.my_1p5()
+                            .border_1()
+                            .when(tool_failed || command_failed, |card| card.border_dashed())
+                            .border_color(border_color)
+                            .rounded_md()
+                    } else {
+                        this.my_1()
+                    }
+                })
             })
             .overflow_hidden()
             .child(header)
@@ -10280,6 +10323,11 @@ impl ThreadView {
                 .upgrade()
                 .and_then(|server_view| server_view.read(cx).as_connected())
                 .and_then(|connected| connected.threads.get(&session_id))
+                // An external agent can emit subagent_session_info that points
+                // back at a session already being rendered (a cycle). Reading
+                // that view here would double-lease the entity this render is
+                // running inside and panic; fall back to the no-thread card.
+                .filter(|view| view.entity_id() != cx.entity_id())
         });
 
         let content = self.render_subagent_card(
@@ -10751,7 +10799,9 @@ impl ThreadView {
     }
 
     fn tool_name_font_size(&self) -> Rems {
-        rems_from_px(13.)
+        // Matches the text_xs scale used by tool output, so label rows and the
+        // content under them read as one type ramp.
+        rems_from_px(12.)
     }
 
     fn provider_by_name(name: &SharedString, cx: &App) -> Option<Arc<dyn LanguageModelProvider>> {
@@ -12391,6 +12441,26 @@ mod tests {
     use util::path;
     use workspace::MultiWorkspace;
 
+    #[test]
+    fn thinking_block_label_by_state() {
+        // Live thought.
+        assert_eq!(
+            thinking_block_label(Some(std::time::Instant::now()), None),
+            "Thinking"
+        );
+        // Settled thoughts carry their duration.
+        assert_eq!(
+            thinking_block_label(None, Some(Duration::from_millis(400))),
+            "Thought briefly"
+        );
+        assert_eq!(
+            thinking_block_label(None, Some(Duration::from_secs(16))),
+            "Thought for 16s"
+        );
+        // Replayed history has no timing.
+        assert_eq!(thinking_block_label(None, None), "Thought process");
+    }
+
     fn native_command(name: &str) -> acp::AvailableCommand {
         acp::AvailableCommand::new(name, "").meta(acp_thread::meta_with_command_category(
             acp_thread::CommandCategory::Native,
@@ -12653,4 +12723,24 @@ pub(crate) fn reset_fast_mode_warnings(cx: &mut App) {
             .log_err();
     })
     .detach();
+}
+
+/// Label for a thinking block: live thoughts read "Thinking", settled ones
+/// carry their duration, and replayed history (which has no timing) falls
+/// back to a neutral past tense.
+fn thinking_block_label(
+    started_at: Option<std::time::Instant>,
+    duration: Option<Duration>,
+) -> SharedString {
+    if started_at.is_some() {
+        return "Thinking".into();
+    }
+    match duration {
+        Some(duration) if duration < Duration::from_secs(1) => "Thought briefly".into(),
+        Some(duration) if duration < Duration::from_secs(60) => {
+            format!("Thought for {}s", duration.as_secs()).into()
+        }
+        Some(duration) => format!("Thought for {}", duration_alt_display(duration)).into(),
+        None => "Thought process".into(),
+    }
 }
