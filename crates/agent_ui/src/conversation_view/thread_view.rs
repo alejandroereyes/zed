@@ -6205,8 +6205,8 @@ impl ThreadView {
                             .relative()
                             .child(
                                 div()
-                                    .py_3()
-                                    .px_2()
+                                    .py_2()
+                                    .px_3()
                                     .rounded_md()
                                     .bg(cx.theme().colors().editor_background)
                                     .border_1()
@@ -6376,7 +6376,7 @@ impl ThreadView {
                 } else {
                     v_flex()
                         .px_5()
-                        .py_1p5()
+                        .py_2()
                         .when(is_last, |this| this.pb_4())
                         .w_full()
                         .text_ui(cx)
@@ -7517,7 +7517,18 @@ impl ThreadView {
                                 .overflow_hidden()
                                 .child(self.render_markdown(
                                     chunk,
-                                    MarkdownStyle::themed(MarkdownFont::Agent, window, cx),
+                                    {
+                                        // Italicize thought text so it reads as an
+                                        // aside rather than part of the answer.
+                                        let mut style = MarkdownStyle::themed(
+                                            MarkdownFont::Agent,
+                                            window,
+                                            cx,
+                                        );
+                                        style.base_text_style.font_style =
+                                            gpui::FontStyle::Italic;
+                                        style
+                                    },
                                     cx,
                                 )),
                         )
