@@ -669,7 +669,11 @@ fn create_editor_diff(
             window,
             cx,
         );
-        editor.set_show_gutter(false, cx);
+        // Line numbers orient a reviewer inside a large diff; everything else
+        // the gutter could hold (breakpoints, code actions, git status) is
+        // disabled below, so the gutter stays a plain number rail.
+        editor.set_show_gutter(true, cx);
+        editor.set_show_line_numbers(true, cx);
         editor.disable_diagnostics(cx);
         editor.set_max_diagnostics_severity(DiagnosticSeverity::Off, cx);
         editor.disable_expand_excerpt_buttons(cx);
