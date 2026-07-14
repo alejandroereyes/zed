@@ -7703,8 +7703,7 @@ impl ThreadView {
 
         let working_dir = working_dir
             .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "current directory".to_string());
+            .map(|path| path.display().to_string());
 
         let command_element = self.render_collapsible_command(
             header_group.clone(),
@@ -7714,10 +7713,21 @@ impl ThreadView {
             cx,
         );
 
-        let is_expanded = self
-            .entry_view_state
-            .read(cx)
-            .is_tool_call_expanded(&tool_call.id);
+        let command_source = tool_call.label.read(cx).source().to_string();
+        let command_summary = crate::ui::command_summary_chip(
+            command_source
+                .strip_prefix("```\n")
+                .and_then(|s| s.strip_suffix("\n```"))
+                .unwrap_or(&command_source),
+        );
+
+        // A pending confirmation must always show the command being approved,
+        // regardless of the card's collapsed state.
+        let is_expanded = needs_confirmation
+            || self
+                .entry_view_state
+                .read(cx)
+                .is_tool_call_expanded(&tool_call.id);
 
         let truncated_tooltip = truncated_output.then(|| {
             if let Some(output) = output {
@@ -7740,13 +7750,19 @@ impl ThreadView {
             }
         });
 
-        let header = TerminalToolHeader::new(
+        let mut header = TerminalToolHeader::new(
             terminal.entity_id().to_string(),
             header_group,
-            working_dir,
             is_expanded,
-        )
-        .elapsed(time_elapsed)
+        );
+        if let Some(working_dir) = working_dir {
+            header = header.working_dir(working_dir);
+        }
+        if let Some(command_summary) = command_summary {
+            header = header.command_summary(command_summary);
+        }
+        let header = header
+            .elapsed(time_elapsed)
         .running(!command_finished && !needs_confirmation)
         .on_toggle_expand(cx.listener({
             let id = tool_call.id.clone();
@@ -7792,12 +7808,20 @@ impl ThreadView {
 
         v_flex()
             .when(layout == ToolCallLayout::Standalone, |this| {
-                this.my_1p5()
-                    .mx_5()
-                    .border_1()
-                    .when(tool_failed || command_failed, |card| card.border_dashed())
-                    .border_color(border_color)
-                    .rounded_md()
+                this.mx_5().map(|this| {
+                    // Collapsed terminal calls read as flat activity lines,
+                    // like read/search rows; the card chrome belongs to the
+                    // expanded view.
+                    if is_expanded {
+                        this.my_1p5()
+                            .border_1()
+                            .when(tool_failed || command_failed, |card| card.border_dashed())
+                            .border_color(border_color)
+                            .rounded_md()
+                    } else {
+                        this.my_1()
+                    }
+                })
             })
             .overflow_hidden()
             .child(header)
