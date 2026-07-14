@@ -6120,8 +6120,8 @@ impl ThreadView {
                             .relative()
                             .child(
                                 div()
-                                    .py_3()
-                                    .px_2()
+                                    .py_2()
+                                    .px_3()
                                     .rounded_md()
                                     .bg(cx.theme().colors().editor_background)
                                     .border_1()
@@ -6289,7 +6289,7 @@ impl ThreadView {
                 } else {
                     v_flex()
                         .px_5()
-                        .py_1p5()
+                        .py_2()
                         .when(is_last, |this| this.pb_4())
                         .w_full()
                         .text_ui(cx)
@@ -7349,7 +7349,18 @@ impl ThreadView {
                                 .overflow_hidden()
                                 .child(self.render_markdown(
                                     chunk,
-                                    MarkdownStyle::themed(MarkdownFont::Agent, window, cx),
+                                    {
+                                        // Italicize thought text so it reads as an
+                                        // aside rather than part of the answer.
+                                        let mut style = MarkdownStyle::themed(
+                                            MarkdownFont::Agent,
+                                            window,
+                                            cx,
+                                        );
+                                        style.base_text_style.font_style =
+                                            gpui::FontStyle::Italic;
+                                        style
+                                    },
                                     cx,
                                 )),
                         )
@@ -10706,7 +10717,9 @@ impl ThreadView {
     }
 
     fn tool_name_font_size(&self) -> Rems {
-        rems_from_px(13.)
+        // Matches the text_xs scale used by tool output, so label rows and the
+        // content under them read as one type ramp.
+        rems_from_px(12.)
     }
 
     fn provider_by_name(name: &SharedString, cx: &App) -> Option<Arc<dyn LanguageModelProvider>> {
