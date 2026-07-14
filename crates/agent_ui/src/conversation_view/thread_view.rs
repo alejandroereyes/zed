@@ -7640,13 +7640,25 @@ impl ThreadView {
             .tooltip_label("Copy Command")
             .visible_on_hover(group.clone());
 
+        // Cap the always-visible command at roughly five lines: a multiline
+        // heredoc or inline script would otherwise stretch the header to its
+        // full length and dominate the panel. The rest stays reachable by
+        // scrolling within the header.
+        let command_scroll_id = SharedString::from(format!("{group}-command-scroll"));
+
         v_flex()
             .group(group)
             .relative()
             .p_1p5()
             .bg(header_bg)
             .when(is_preview, |this| this.pt_1().children(run_command_label))
-            .child(markdown_element)
+            .child(
+                div()
+                    .id(command_scroll_id)
+                    .max_h_24()
+                    .overflow_y_scroll()
+                    .child(markdown_element),
+            )
             .child(div().absolute().top_1().right_1().child(copy_button))
     }
 
@@ -7820,7 +7832,16 @@ impl ThreadView {
                             {
                                 div().h_72().child(terminal_view).into_any_element()
                             } else {
-                                terminal_view.into_any_element()
+                                // A non-scrollable content mode can still hold long
+                                // output (e.g. a display-only terminal fed a large
+                                // command result); cap it and scroll the container
+                                // instead of letting the card grow unbounded.
+                                div()
+                                    .id(("terminal-output-cap", entry_ix))
+                                    .max_h_72()
+                                    .overflow_y_scroll()
+                                    .child(terminal_view)
+                                    .into_any_element()
                             };
 
                             div()
@@ -8152,15 +8173,22 @@ impl ThreadView {
                                     .when(is_raw_input_expanded, |this| {
                                         this.children(tool_call.raw_input_markdown.clone().map(
                                             |input| {
-                                                self.render_markdown(
-                                                    input,
-                                                    MarkdownStyle::themed(
-                                                        MarkdownFont::Agent,
-                                                        window,
+                                                // Raw input can be arbitrarily large (a full
+                                                // subagent prompt, a heredoc); cap it like
+                                                // tool output.
+                                                div()
+                                                    .id(("confirmation-raw-input", entry_ix))
+                                                    .max_h_48()
+                                                    .overflow_y_scroll()
+                                                    .child(self.render_markdown(
+                                                        input,
+                                                        MarkdownStyle::themed(
+                                                            MarkdownFont::Agent,
+                                                            window,
+                                                            cx,
+                                                        ),
                                                         cx,
-                                                    ),
-                                                    cx,
-                                                )
+                                                    ))
                                             },
                                         ))
                                     }),
@@ -8222,13 +8250,17 @@ impl ThreadView {
                                 .border_color(self.tool_card_border_color(cx))
                                 .child(input_output_header("Raw Input:".into()))
                                 .children(tool_call.raw_input_markdown.clone().map(|input| {
-                                    div().id(("tool-call-raw-input-markdown", entry_ix)).child(
-                                        self.render_markdown(
+                                    // Raw input can be arbitrarily large (a full subagent
+                                    // prompt, a heredoc); cap it like tool output.
+                                    div()
+                                        .id(("tool-call-raw-input-markdown", entry_ix))
+                                        .max_h_48()
+                                        .overflow_y_scroll()
+                                        .child(self.render_markdown(
                                             input,
                                             MarkdownStyle::themed(MarkdownFont::Agent, window, cx),
                                             cx,
-                                        ),
-                                    )
+                                        ))
                                 }))
                                 .child(input_output_header("Output:".into())),
                         )
@@ -10147,7 +10179,20 @@ impl ThreadView {
             })
             .text_xs()
             .text_color(cx.theme().colors().text_muted)
-            .child(output)
+            .child(
+                // Cap expanded tool output so a single long result (a large
+                // file read, verbose command output) can't consume the whole
+                // panel; the full text stays reachable by scrolling within
+                // the block.
+                div()
+                    .id((
+                        "tool-output-scroll",
+                        ((entry_ix as u64) << 32) | context_ix as u64,
+                    ))
+                    .max_h_48()
+                    .overflow_y_scroll()
+                    .child(output),
+            )
             .into_any_element()
     }
 
