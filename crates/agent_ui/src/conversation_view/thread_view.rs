@@ -714,6 +714,29 @@ struct ExploredRun {
 /// The tool call at `entry`, if it may fold into an exploratory group: a
 /// read/search/fetch call that is neither awaiting confirmation (a permission
 /// prompt must stay a standalone card) nor a subagent invocation.
+/// True when `index` is the first entry of a turn's assistant work (the entry
+/// right after a user message, or the very first entry of the thread).
+fn is_turn_start(entries: &[AgentThreadEntry], index: usize) -> bool {
+    match entries.get(index) {
+        None | Some(AgentThreadEntry::UserMessage(_)) => false,
+        Some(_) => match index.checked_sub(1) {
+            None => true,
+            Some(prev) => matches!(entries.get(prev), Some(AgentThreadEntry::UserMessage(_))),
+        },
+    }
+}
+
+/// Zero-based index of the turn that `index` belongs to, for indexing into
+/// `completed_turn_durations()` (ordered by turn completion).
+fn turn_ordinal(entries: &[AgentThreadEntry], index: usize) -> usize {
+    entries
+        .iter()
+        .take(index + 1)
+        .filter(|entry| matches!(entry, AgentThreadEntry::UserMessage(_)))
+        .count()
+        .saturating_sub(1)
+}
+
 fn groupable_tool_call(entry: &AgentThreadEntry) -> Option<&ToolCall> {
     match entry {
         AgentThreadEntry::ToolCall(tool_call)
@@ -6682,6 +6705,36 @@ impl ThreadView {
                 .into_any_element()
         } else {
             primary
+        };
+
+        // "Worked for {duration}" turn rollup: a muted, small header above the
+        // first entry of a completed turn's assistant work.
+        let primary = {
+            let thread = self.thread.read(cx);
+            let entries = thread.entries();
+            let worked_for = if is_turn_start(entries, entry_ix) {
+                thread
+                    .completed_turn_durations()
+                    .get(turn_ordinal(entries, entry_ix))
+                    .copied()
+            } else {
+                None
+            };
+            if let Some(duration) = worked_for {
+                v_flex()
+                    .w_full()
+                    .child(
+                        h_flex().px_5().py_1().child(
+                            Label::new(format!("Worked for {}", duration_alt_display(duration)))
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        ),
+                    )
+                    .child(primary)
+                    .into_any_element()
+            } else {
+                primary
+            }
         };
 
         let thread = self.thread.clone();
