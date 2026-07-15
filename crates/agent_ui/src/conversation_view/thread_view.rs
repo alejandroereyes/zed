@@ -10054,9 +10054,9 @@ impl ThreadView {
                     } else {
                         this.bg(linear_gradient(
                             90.,
-                            linear_color_stop(cx.theme().colors().panel_background, 1.),
+                            linear_color_stop(cx.theme().colors().editor_background, 1.),
                             linear_color_stop(
-                                cx.theme().colors().panel_background.opacity(0.2),
+                                cx.theme().colors().editor_background.opacity(0.2),
                                 0.,
                             ),
                         ))
