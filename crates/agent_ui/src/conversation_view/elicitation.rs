@@ -199,7 +199,12 @@ impl ElicitationFormState {
         if let Some(ElicitationFieldState::SingleSelect { value: selected }) =
             self.fields.get_mut(field_name)
         {
-            *selected = Some(value);
+            // Clicking the already-selected option clears it; any other click selects it.
+            *selected = if selected.as_ref() == Some(&value) {
+                None
+            } else {
+                Some(value)
+            };
             self.field_errors.remove(field_name);
         }
     }
@@ -763,6 +768,38 @@ mod tests {
                     .to_string(),
                 "Environment must be one of the provided options"
             );
+
+            Editor::single_line(window, cx)
+        });
+    }
+
+    #[gpui::test]
+    fn set_single_select_toggles_selection_off_on_reclick(cx: &mut TestAppContext) {
+        crate::conversation_view::tests::init_test(cx);
+
+        cx.add_window(|window, cx| {
+            let schema = acp::ElicitationSchema::new().property(
+                "environment",
+                acp::StringPropertySchema::new()
+                    .title("Environment")
+                    .enum_values(vec!["production".to_string(), "staging".to_string()]),
+                false,
+            );
+            let mut form_state = ElicitationFormState::new(&schema, window, cx);
+
+            let selected = |form: &ElicitationFormState| match form.fields.get("environment") {
+                Some(ElicitationFieldState::SingleSelect { value }) => value.clone(),
+                _ => panic!("environment should be a single-select field"),
+            };
+
+            form_state.set_single_select("environment", "production".to_string());
+            assert_eq!(selected(&form_state), Some("production".to_string()));
+
+            form_state.set_single_select("environment", "production".to_string());
+            assert_eq!(selected(&form_state), None, "re-clicking should clear");
+
+            form_state.set_single_select("environment", "staging".to_string());
+            assert_eq!(selected(&form_state), Some("staging".to_string()));
 
             Editor::single_line(window, cx)
         });
@@ -1851,7 +1888,7 @@ impl<'a> ElicitationCard<'a> {
             .min_w_0()
             .flex_1()
             .gap_0p5()
-            .child(Label::new(option.label).size(LabelSize::Small).truncate())
+            .child(Label::new(option.label).size(LabelSize::Small))
             .when_some(option.description, |this, description| {
                 this.child(
                     Label::new(description)
