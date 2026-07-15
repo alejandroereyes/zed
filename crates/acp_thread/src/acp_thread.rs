@@ -2083,6 +2083,7 @@ pub fn refusal_fallback_model_from_meta(meta: &Option<acp::Meta>) -> Option<Shar
 
 struct RunningTurn {
     id: u32,
+    started_at: Instant,
     send_task: Task<()>,
 }
 
@@ -2102,6 +2103,7 @@ pub struct AcpThread {
     shared_buffers: HashMap<Entity<Buffer>, BufferSnapshot>,
     turn_id: u32,
     running_turn: Option<RunningTurn>,
+    completed_turn_durations: Vec<Duration>,
     connection: Rc<dyn AgentConnection>,
     token_usage: Option<TokenUsage>,
     cost: Option<SessionCost>,
@@ -2313,6 +2315,7 @@ impl AcpThread {
             provisional_title: None,
             project,
             running_turn: None,
+            completed_turn_durations: Vec::new(),
             turn_id: 0,
             connection,
             session_id,
@@ -2392,6 +2395,12 @@ impl AcpThread {
 
     pub fn entries(&self) -> &[AgentThreadEntry] {
         &self.entries
+    }
+
+    /// Wall-clock durations of completed turns in completion order; the Nth value
+    /// is the Nth completed turn. A currently-running turn has no value yet.
+    pub fn completed_turn_durations(&self) -> &[Duration] {
+        &self.completed_turn_durations
     }
 
     pub fn is_compacting(&self) -> bool {
@@ -3746,6 +3755,7 @@ impl AcpThread {
         let turn_id = self.turn_id;
         self.running_turn = Some(RunningTurn {
             id: turn_id,
+            started_at: Instant::now(),
             send_task: cx.spawn(async move |this, cx| {
                 cancel_task.await;
                 tx.send(f(this, cx).await).ok();
@@ -3776,7 +3786,9 @@ impl AcpThread {
                 // dropped-tx guard below so the panel exits its generating
                 // state even when the send_task is cancelled before tx.send().
                 if is_same_turn {
-                    this.running_turn.take();
+                    if let Some(turn) = this.running_turn.take() {
+                        this.completed_turn_durations.push(turn.started_at.elapsed());
+                    }
                 }
 
                 let Ok(response) = response else {
