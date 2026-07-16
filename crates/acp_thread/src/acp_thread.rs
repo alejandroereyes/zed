@@ -124,6 +124,9 @@ pub fn command_category_from_meta(meta: &Option<acp::Meta>) -> Option<CommandCat
 /// Key used in ACP ToolCall meta to store the session id and message indexes
 pub const SUBAGENT_SESSION_INFO_META_KEY: &str = "subagent_session_info";
 
+/// Key used in ACP ToolCall meta to carry a "Created Plan" card (path/title/summary)
+pub const PLAN_CARD_META_KEY: &str = "plan_card";
+
 pub const SANDBOX_AUTHORIZATION_META_KEY: &str = "sandbox_authorization";
 
 /// Stable `PermissionOption` ids for the sandbox-escalation approval prompt.
@@ -287,6 +290,27 @@ pub struct SubagentSessionInfo {
 pub fn subagent_session_info_from_meta(meta: &Option<acp::Meta>) -> Option<SubagentSessionInfo> {
     meta.as_ref()
         .and_then(|m| m.get(SUBAGENT_SESSION_INFO_META_KEY))
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+}
+
+/// A "Created Plan" card: the plan markdown file plus display strings, carried on
+/// the ExitPlanMode tool call so the panel can render a dedicated card.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PlanCardInfo {
+    /// Absolute path to the plan markdown file.
+    pub path: String,
+    /// Plan title (first heading), if present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// One-line plan summary, if present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+/// Helper to extract the Created Plan card info from ACP meta.
+pub fn plan_card_from_meta(meta: &Option<acp::Meta>) -> Option<PlanCardInfo> {
+    meta.as_ref()
+        .and_then(|m| m.get(PLAN_CARD_META_KEY))
         .and_then(|v| serde_json::from_value(v.clone()).ok())
 }
 
@@ -870,6 +894,7 @@ pub struct ToolCall {
     pub raw_output: Option<serde_json::Value>,
     pub tool_name: Option<SharedString>,
     pub subagent_session_info: Option<SubagentSessionInfo>,
+    pub plan_card: Option<PlanCardInfo>,
     pub sandbox_authorization_details: Option<SandboxAuthorizationDetails>,
     pub sandbox_fallback_authorization_details: Option<SandboxFallbackAuthorizationDetails>,
     /// Why this terminal command ran without the OS sandbox even though
@@ -917,6 +942,7 @@ impl ToolCall {
         let tool_name = tool_name_from_meta(&tool_call.meta);
 
         let subagent_session_info = subagent_session_info_from_meta(&tool_call.meta);
+        let plan_card = plan_card_from_meta(&tool_call.meta);
         let sandbox_authorization_details =
             sandbox_authorization_details_from_meta(&tool_call.meta);
         let sandbox_fallback_authorization_details =
@@ -942,6 +968,7 @@ impl ToolCall {
             raw_output: tool_call.raw_output,
             tool_name,
             subagent_session_info,
+            plan_card,
             sandbox_authorization_details,
             sandbox_fallback_authorization_details,
             sandbox_not_applied,
@@ -979,6 +1006,9 @@ impl ToolCall {
 
         if let Some(subagent_session_info) = subagent_session_info_from_meta(&meta) {
             self.subagent_session_info = Some(subagent_session_info);
+        }
+        if let Some(plan_card) = plan_card_from_meta(&meta) {
+            self.plan_card = Some(plan_card);
         }
         if let Some(sandbox_authorization_details) = sandbox_authorization_details_from_meta(&meta)
         {
@@ -3143,6 +3173,7 @@ impl AcpThread {
                     raw_output: None,
                     tool_name: None,
                     subagent_session_info: None,
+                    plan_card: None,
                     sandbox_authorization_details: None,
                     sandbox_fallback_authorization_details: None,
                     sandbox_not_applied: None,
