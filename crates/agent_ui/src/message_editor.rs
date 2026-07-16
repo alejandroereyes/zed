@@ -207,6 +207,7 @@ pub struct MessageEditor {
     local_commands: SharedLocalCommands,
     agent_id: AgentId,
     thread_store: Option<Entity<ThreadStore>>,
+    transparent_background: bool,
     _subscriptions: Vec<Subscription>,
     _parse_slash_command_task: Task<()>,
 }
@@ -609,9 +610,18 @@ impl MessageEditor {
             local_commands,
             agent_id,
             thread_store,
+            transparent_background: false,
             _subscriptions: subscriptions,
             _parse_slash_command_task: Task::ready(()),
         }
+    }
+
+    /// Let the containing element paint the background instead of the editor,
+    /// so displays embedded in an already-filled container (like the user
+    /// message bubble) render as a single solid block.
+    pub fn set_transparent_background(&mut self, cx: &mut Context<Self>) {
+        self.transparent_background = true;
+        cx.notify();
     }
 
     pub fn set_local_commands(&self, commands: Vec<PromptLocalCommand>) {
@@ -2031,7 +2041,11 @@ impl Render for MessageEditor {
                 EditorElement::new(
                     &self.editor,
                     EditorStyle {
-                        background: cx.theme().colors().editor_background,
+                        background: if self.transparent_background {
+                            gpui::transparent_black()
+                        } else {
+                            cx.theme().colors().editor_background
+                        },
                         local_player: cx.theme().players().local(),
                         text: text_style,
                         syntax: cx.theme().syntax().clone(),
