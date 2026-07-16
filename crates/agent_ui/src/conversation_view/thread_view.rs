@@ -10720,11 +10720,24 @@ impl ThreadView {
                                     .w_full()
                                     .gap_1p5()
                                     .child(icon)
-                                    .child(
-                                        Label::new(title.to_string())
+                                    .child({
+                                        let title_label = Label::new(title.to_string())
                                             .size(LabelSize::Custom(self.tool_name_font_size()))
-                                            .truncate(),
-                                    )
+                                            .truncate();
+                                        if is_running {
+                                            title_label
+                                                .with_animation(
+                                                    ("subagent-title-pulse", entry_ix),
+                                                    Animation::new(Duration::from_secs(2))
+                                                        .repeat()
+                                                        .with_easing(pulsating_between(0.3, 0.7)),
+                                                    |label, delta| label.alpha(delta),
+                                                )
+                                                .into_any_element()
+                                        } else {
+                                            title_label.into_any_element()
+                                        }
+                                    })
                                     .when_some(model_badge, |this, badge| {
                                         this.child(
                                             Label::new(format!("· {badge}"))
