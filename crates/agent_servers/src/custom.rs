@@ -223,6 +223,10 @@ impl AgentServer for CustomAgentServer {
         }
 
         let mut extra_env = load_proxy_env(cx);
+        // This build carries renderer patches that supersede some agent-side
+        // presentation workarounds; announce it to spawned agents so they can
+        // switch those off. Stock builds never set this variable.
+        extra_env.insert("AI_CHAT_ZED_FORK".to_owned(), "1".to_owned());
         if delegate.store.read(cx).no_browser() {
             extra_env.insert("NO_BROWSER".to_owned(), "1".to_owned());
         }
