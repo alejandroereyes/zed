@@ -6353,6 +6353,7 @@ impl ThreadView {
                                 ..
                             } => {
                                 let label = thinking_block_label(*started_at, *duration);
+                                let is_thinking = started_at.is_some();
                                 block.markdown().and_then(|md| {
                                     let this_is_blank = md.read(cx).source().trim().is_empty();
                                     is_blank = is_blank && this_is_blank;
@@ -6364,6 +6365,7 @@ impl ThreadView {
                                             entry_ix,
                                             chunk_ix,
                                             label.clone(),
+                                            is_thinking,
                                             md.clone(),
                                             window,
                                             cx,
@@ -7443,6 +7445,7 @@ impl ThreadView {
         entry_ix: usize,
         chunk_ix: usize,
         label: SharedString,
+        is_thinking: bool,
         chunk: Entity<Markdown>,
         window: &Window,
         cx: &Context<Self>,
@@ -7487,12 +7490,30 @@ impl ThreadView {
                                     .size(IconSize::Small)
                                     .color(Color::Muted),
                             )
-                            .child(
-                                div()
+                            .child({
+                                let label_element = div()
                                     .text_size(self.tool_name_font_size())
                                     .text_color(cx.theme().colors().text_muted)
-                                    .child(label),
-                            ),
+                                    .child(label);
+                                if is_thinking {
+                                    label_element
+                                        .with_animation(
+                                            ElementId::Name(
+                                                format!(
+                                                    "thinking-label-pulse-{entry_ix}-{chunk_ix}"
+                                                )
+                                                .into(),
+                                            ),
+                                            Animation::new(Duration::from_secs(2))
+                                                .repeat()
+                                                .with_easing(pulsating_between(0.3, 0.7)),
+                                            |element, delta| element.opacity(delta),
+                                        )
+                                        .into_any_element()
+                                } else {
+                                    label_element.into_any_element()
+                                }
+                            }),
                     )
                     .child(
                         Disclosure::new(("expand", entry_ix), is_open)
