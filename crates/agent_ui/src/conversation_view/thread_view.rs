@@ -10628,6 +10628,16 @@ impl ThreadView {
             "Spawning Agent…".into()
         };
 
+        let model_badge: Option<SharedString> =
+            tool_call.subagent_session_info.as_ref().and_then(|info| {
+                let model = info.model.as_deref().filter(|value| !value.is_empty())?;
+                let badge = match info.effort.as_deref().filter(|value| !value.is_empty()) {
+                    Some(effort) => format!("{model} {effort}"),
+                    None => model.to_string(),
+                };
+                Some(badge.into())
+            });
+
         let card_header_id = format!("subagent-header-{}", entry_ix);
         let status_icon = format!("status-icon-{}", entry_ix);
         let diff_stat_id = format!("subagent-diff-{}", entry_ix);
@@ -10715,6 +10725,13 @@ impl ThreadView {
                                             .size(LabelSize::Custom(self.tool_name_font_size()))
                                             .truncate(),
                                     )
+                                    .when_some(model_badge, |this, badge| {
+                                        this.child(
+                                            Label::new(format!("· {badge}"))
+                                                .size(LabelSize::Custom(self.tool_name_font_size()))
+                                                .color(Color::Muted),
+                                        )
+                                    })
                                     .when(files_changed > 0, |this| {
                                         this.child(
                                             Label::new(format!(

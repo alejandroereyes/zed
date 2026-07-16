@@ -281,6 +281,12 @@ pub struct SubagentSessionInfo {
     /// The index of the output of the message that the subagent has returned
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_end_index: Option<usize>,
+    /// The display name of the model the subagent was launched with
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The reasoning effort the subagent was launched with
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 /// Helper to extract subagent session id from ACP meta
@@ -4885,6 +4891,8 @@ mod tests {
             session_id: acp::SessionId::new("subagent-session"),
             message_start_index: 0,
             message_end_index: None,
+            model: None,
+            effort: None,
         };
 
         // Absent -> present: announce the subagent.

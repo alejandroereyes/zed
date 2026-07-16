@@ -176,6 +176,8 @@ impl AgentTool for SpawnAgentTool {
                     session_id: subagent.id(),
                     message_start_index: subagent.num_entries(cx),
                     message_end_index: None,
+                    model: None,
+                    effort: None,
                 };
 
                 event_stream.subagent_spawned(subagent.id());
