@@ -7875,6 +7875,7 @@ impl ThreadView {
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "current directory".to_string());
 
+        let is_running = !command_finished && !needs_confirmation;
         let command_element = self.render_collapsible_command(
             header_group.clone(),
             false,
@@ -7882,6 +7883,22 @@ impl ThreadView {
             window,
             cx,
         );
+        // Shimmer the command line while the command is in flight; the pulse is
+        // gated on the running status, so it settles the instant the command ends.
+        let command_element = if is_running {
+            div()
+                .child(command_element)
+                .with_animation(
+                    ("terminal-command-pulse", entry_ix),
+                    Animation::new(Duration::from_secs(2))
+                        .repeat()
+                        .with_easing(pulsating_between(0.3, 0.7)),
+                    |element, delta| element.opacity(delta),
+                )
+                .into_any_element()
+        } else {
+            command_element.into_any_element()
+        };
 
         let is_expanded = self
             .entry_view_state
@@ -7916,7 +7933,7 @@ impl ThreadView {
             is_expanded,
         )
         .elapsed(time_elapsed)
-        .running(!command_finished && !needs_confirmation)
+        .running(is_running)
         .on_toggle_expand(cx.listener({
             let id = tool_call.id.clone();
             move |this, _event, window, cx| {
