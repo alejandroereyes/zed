@@ -308,6 +308,21 @@ pub struct PlanCardInfo {
     /// Number of checklist items in the plan's to-do list, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub todos_total: Option<u64>,
+    /// Build policy supplied by the agent. When absent, no Build button is
+    /// offered — the renderer carries no execution policy of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<PlanBuildInfo>,
+}
+
+/// How a plan should be executed when the user asks to build it: the session
+/// mode to enter and the instruction to send, both chosen by the agent.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PlanBuildInfo {
+    /// Session mode (or "mode" config option value) to switch into, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode_id: Option<String>,
+    /// The user message that starts the build.
+    pub prompt: String,
 }
 
 /// Helper to extract the Created Plan card info from ACP meta.

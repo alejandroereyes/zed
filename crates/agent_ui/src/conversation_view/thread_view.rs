@@ -8090,25 +8090,15 @@ impl ThreadView {
     }
 
     /// A compact "Created Plan" card: title + one-line summary, with a "View Plan"
-    /// button (opens the plan markdown file) and a "Build" button (leaves read-only
-    /// plan mode for the execution mode and asks the agent to carry out the plan).
+    /// button (opens the plan markdown file) and — when the agent supplied a build
+    /// policy in the card meta — a "Build" button that enters the policy's session
+    /// mode and sends its prompt. The renderer carries no execution policy itself.
     fn render_plan_card(
         &self,
         entry_ix: usize,
         plan_card: &acp_thread::PlanCardInfo,
         cx: &Context<Self>,
     ) -> AnyElement {
-        // The mode the Build button switches into (leaving read-only plan mode) and
-        // the instruction it sends. The mode id must match one the agent advertises.
-        // "auto" keeps the build unattended: non-edit tools (shell, MCP) are
-        // classifier-approved instead of pausing the run on permission prompts,
-        // which "acceptEdits" only bypasses for file edits.
-        const EXECUTION_MODE_ID: &str = "auto";
-        const BUILD_PROMPT: &str = "The plan is approved — switch to executing it now. \
-Implement the plan as written; do not rewrite the plan document. As you finish each item in the \
-plan's \"## To-dos\" checklist, mark it complete by changing its `- [ ]` to `- [x]` in the plan \
-file. Keep going until every to-do is complete.";
-
         let title = plan_card
             .title
             .clone()
@@ -8128,7 +8118,11 @@ file. Keep going until every to-do is complete.";
         // Build drives a mode switch through the connection (session modes or the
         // "mode" config option, whichever the agent exposes), so it isn't gated on a
         // mode_selector — external agents that use config options have none.
-        let can_build = !self.is_subagent();
+        let build_info = if self.is_subagent() {
+            None
+        } else {
+            plan_card.build.clone()
+        };
 
         v_flex()
             .w_full()
@@ -8247,7 +8241,7 @@ file. Keep going until every to-do is complete.";
                                                 },
                                             )),
                                     )
-                                    .when(can_build, |this| {
+                                    .when_some(build_info, |this, build_info| {
                                         this.child(
                                             Button::new(("build-plan", entry_ix), "Build")
                                                 .label_size(LabelSize::Small)
@@ -8259,37 +8253,45 @@ file. Keep going until every to-do is complete.";
                                                             thread.session_id().clone();
                                                         let connection =
                                                             thread.connection().clone();
-                                                        // Leave read-only plan mode for the execution mode. Prefer
-                                                        // ACP session modes; fall back to the "mode" config option
-                                                        // (external config-option agents advertise no session modes).
-                                                        if let Some(modes) = connection
-                                                            .session_modes(&session_id, cx)
-                                                        {
-                                                            modes
-                                                                .set_mode(
-                                                                    acp::SessionModeId::new(
-                                                                        EXECUTION_MODE_ID,
-                                                                    ),
+                                                        // Enter the mode the agent's build policy names, if
+                                                        // any. Prefer ACP session modes; fall back to the
+                                                        // "mode" config option (external config-option
+                                                        // agents advertise no session modes).
+                                                        if let Some(mode_id) = &build_info.mode_id {
+                                                            if let Some(modes) = connection
+                                                                .session_modes(&session_id, cx)
+                                                            {
+                                                                modes
+                                                                    .set_mode(
+                                                                        acp::SessionModeId::new(
+                                                                            mode_id.as_str(),
+                                                                        ),
+                                                                        cx,
+                                                                    )
+                                                                    .detach();
+                                                            } else if let Some(options) =
+                                                                connection.session_config_options(
+                                                                    &session_id,
                                                                     cx,
                                                                 )
-                                                                .detach();
-                                                        } else if let Some(options) = connection
-                                                            .session_config_options(&session_id, cx)
-                                                        {
-                                                            options
-                                                .set_config_option(
-                                                    acp::SessionConfigId::new("mode"),
-                                                    acp::SessionConfigOptionValue::value_id(
-                                                        EXECUTION_MODE_ID,
-                                                    ),
-                                                    cx,
-                                                )
-                                                .detach();
+                                                            {
+                                                                options
+                                                                    .set_config_option(
+                                                                        acp::SessionConfigId::new(
+                                                                            "mode",
+                                                                        ),
+                                                                        acp::SessionConfigOptionValue::value_id(
+                                                                            mode_id.clone(),
+                                                                        ),
+                                                                        cx,
+                                                                    )
+                                                                    .detach();
+                                                            }
                                                         }
                                                         let contents =
                                                             vec![acp::ContentBlock::Text(
                                                                 acp::TextContent::new(
-                                                                    BUILD_PROMPT.to_string(),
+                                                                    build_info.prompt.clone(),
                                                                 ),
                                                             )];
                                                         this.send_content(
