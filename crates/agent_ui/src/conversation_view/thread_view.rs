@@ -8100,7 +8100,10 @@ impl ThreadView {
     ) -> AnyElement {
         // The mode the Build button switches into (leaving read-only plan mode) and
         // the instruction it sends. The mode id must match one the agent advertises.
-        const EXECUTION_MODE_ID: &str = "acceptEdits";
+        // "auto" keeps the build unattended: non-edit tools (shell, MCP) are
+        // classifier-approved instead of pausing the run on permission prompts,
+        // which "acceptEdits" only bypasses for file edits.
+        const EXECUTION_MODE_ID: &str = "auto";
         const BUILD_PROMPT: &str = "The plan is approved — switch to executing it now. \
 Implement the plan as written; do not rewrite the plan document. As you finish each item in the \
 plan's \"## To-dos\" checklist, mark it complete by changing its `- [ ]` to `- [x]` in the plan \
