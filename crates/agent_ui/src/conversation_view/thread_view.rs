@@ -10053,6 +10053,31 @@ impl ThreadView {
                 })
         };
 
+        // A two-tier label (action verb + dimmer detail) when the agent supplied
+        // one, so intermediate rows read as compact asides. Falls back to the flat
+        // markdown title otherwise.
+        let two_tier_label = tool_call.tool_detail.as_ref().map(|detail| {
+            let sub_muted = Color::Custom(cx.theme().colors().text_muted.opacity(0.6));
+            h_flex()
+                .w_full()
+                .gap_1()
+                .overflow_hidden()
+                .child(
+                    Label::new(detail.label.clone())
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                )
+                .when_some(detail.detail.clone(), |this, detail_text| {
+                    this.child(
+                        Label::new(detail_text)
+                            .size(LabelSize::Small)
+                            .color(sub_muted)
+                            .truncate(),
+                    )
+                })
+                .into_any_element()
+        });
+
         h_flex()
             .relative()
             .w_full()
@@ -10078,17 +10103,23 @@ impl ThreadView {
                             this.text_color(cx.theme().colors().text_muted)
                         }
                     })
-                    .child(
-                        self.render_markdown(
-                            tool_call.label.clone(),
-                            MarkdownStyle {
-                                prevent_mouse_interaction: true,
-                                ..MarkdownStyle::themed(MarkdownFont::Agent, window, cx)
-                                    .with_muted_text(cx)
-                            },
-                            cx,
-                        ),
-                    )
+                    .map(|this| {
+                        if let Some(two_tier_label) = two_tier_label {
+                            this.child(two_tier_label)
+                        } else {
+                            this.child(
+                                self.render_markdown(
+                                    tool_call.label.clone(),
+                                    MarkdownStyle {
+                                        prevent_mouse_interaction: true,
+                                        ..MarkdownStyle::themed(MarkdownFont::Agent, window, cx)
+                                            .with_muted_text(cx)
+                                    },
+                                    cx,
+                                ),
+                            )
+                        }
+                    })
                     .tooltip(Tooltip::text("Go to File"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_tool_call_location(entry_ix, 0, window, cx);
@@ -10097,11 +10128,20 @@ impl ThreadView {
             } else {
                 h_flex()
                     .w_full()
-                    .child(self.render_markdown(
-                        tool_call.label.clone(),
-                        MarkdownStyle::themed(MarkdownFont::Agent, window, cx).with_muted_text(cx),
-                        cx,
-                    ))
+                    .map(|this| {
+                        if let Some(two_tier_label) = two_tier_label {
+                            this.child(two_tier_label)
+                        } else {
+                            this.child(
+                                self.render_markdown(
+                                    tool_call.label.clone(),
+                                    MarkdownStyle::themed(MarkdownFont::Agent, window, cx)
+                                        .with_muted_text(cx),
+                                    cx,
+                                ),
+                            )
+                        }
+                    })
                     .into_any()
             })
             .when(!is_edit, |this| this.child(gradient_overlay))

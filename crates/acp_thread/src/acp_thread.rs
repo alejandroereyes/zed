@@ -124,6 +124,10 @@ pub fn command_category_from_meta(meta: &Option<acp::Meta>) -> Option<CommandCat
 /// Key used in ACP ToolCall meta to store the session id and message indexes
 pub const SUBAGENT_SESSION_INFO_META_KEY: &str = "subagent_session_info";
 
+/// Key used in ACP ToolCall meta to carry a two-tier label: a short action
+/// verb plus a dimmer detail (e.g. "Searched web" + the query).
+pub const TOOL_DETAIL_META_KEY: &str = "tool_detail";
+
 pub const SANDBOX_AUTHORIZATION_META_KEY: &str = "sandbox_authorization";
 
 /// Stable `PermissionOption` ids for the sandbox-escalation approval prompt.
@@ -287,6 +291,25 @@ pub struct SubagentSessionInfo {
 pub fn subagent_session_info_from_meta(meta: &Option<acp::Meta>) -> Option<SubagentSessionInfo> {
     meta.as_ref()
         .and_then(|m| m.get(SUBAGENT_SESSION_INFO_META_KEY))
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+}
+
+/// A two-tier tool label: a short action verb rendered muted, and an optional
+/// detail (the primary argument) rendered dimmer still, so intermediate rows
+/// read as compact asides rather than answer text.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ToolDetailInfo {
+    /// The action verb (e.g. "Searched web", "Read", "Fetched").
+    pub label: String,
+    /// The primary argument (e.g. the query, file name, or URL).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// Helper to extract the two-tier tool label from ACP meta.
+pub fn tool_detail_from_meta(meta: &Option<acp::Meta>) -> Option<ToolDetailInfo> {
+    meta.as_ref()
+        .and_then(|m| m.get(TOOL_DETAIL_META_KEY))
         .and_then(|v| serde_json::from_value(v.clone()).ok())
 }
 
@@ -870,6 +893,7 @@ pub struct ToolCall {
     pub raw_output: Option<serde_json::Value>,
     pub tool_name: Option<SharedString>,
     pub subagent_session_info: Option<SubagentSessionInfo>,
+    pub tool_detail: Option<ToolDetailInfo>,
     pub sandbox_authorization_details: Option<SandboxAuthorizationDetails>,
     pub sandbox_fallback_authorization_details: Option<SandboxFallbackAuthorizationDetails>,
     /// Why this terminal command ran without the OS sandbox even though
@@ -917,6 +941,7 @@ impl ToolCall {
         let tool_name = tool_name_from_meta(&tool_call.meta);
 
         let subagent_session_info = subagent_session_info_from_meta(&tool_call.meta);
+        let tool_detail = tool_detail_from_meta(&tool_call.meta);
         let sandbox_authorization_details =
             sandbox_authorization_details_from_meta(&tool_call.meta);
         let sandbox_fallback_authorization_details =
@@ -942,6 +967,7 @@ impl ToolCall {
             raw_output: tool_call.raw_output,
             tool_name,
             subagent_session_info,
+            tool_detail,
             sandbox_authorization_details,
             sandbox_fallback_authorization_details,
             sandbox_not_applied,
@@ -979,6 +1005,9 @@ impl ToolCall {
 
         if let Some(subagent_session_info) = subagent_session_info_from_meta(&meta) {
             self.subagent_session_info = Some(subagent_session_info);
+        }
+        if let Some(tool_detail) = tool_detail_from_meta(&meta) {
+            self.tool_detail = Some(tool_detail);
         }
         if let Some(sandbox_authorization_details) = sandbox_authorization_details_from_meta(&meta)
         {
@@ -3143,6 +3172,7 @@ impl AcpThread {
                     raw_output: None,
                     tool_name: None,
                     subagent_session_info: None,
+                    tool_detail: None,
                     sandbox_authorization_details: None,
                     sandbox_fallback_authorization_details: None,
                     sandbox_not_applied: None,
