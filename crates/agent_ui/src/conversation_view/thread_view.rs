@@ -7890,9 +7890,9 @@ impl ThreadView {
                 .child(command_element)
                 .with_animation(
                     ("terminal-command-pulse", entry_ix),
-                    Animation::new(Duration::from_secs(2))
+                    Animation::new(Duration::from_secs(1))
                         .repeat()
-                        .with_easing(pulsating_between(0.3, 0.7)),
+                        .with_easing(pulsating_between(0.6, 1.0)),
                     |element, delta| element.opacity(delta),
                 )
                 .into_any_element()
@@ -8185,9 +8185,9 @@ impl ThreadView {
             element
                 .with_animation(
                     animation_id,
-                    Animation::new(Duration::from_secs(2))
+                    Animation::new(Duration::from_secs(1))
                         .repeat()
-                        .with_easing(pulsating_between(0.3, 0.7)),
+                        .with_easing(pulsating_between(0.6, 1.0)),
                     |element, delta| element.opacity(delta),
                 )
                 .into_any_element()
