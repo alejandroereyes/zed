@@ -8109,9 +8109,22 @@ Implement the plan as written; do not rewrite the plan document. As you finish e
 plan's \"## To-dos\" checklist, mark it complete by changing its `- [ ]` to `- [x]` in the plan \
 file. Keep going until every to-do is complete.";
 
-        let title = plan_card.title.clone().unwrap_or_else(|| "Plan".to_string());
+        let title = plan_card
+            .title
+            .clone()
+            .unwrap_or_else(|| "Plan".to_string());
         let summary = plan_card.summary.clone();
         let plan_path = plan_card.path.clone();
+        let plan_file_name = std::path::Path::new(&plan_card.path)
+            .file_name()
+            .map(|file_name| file_name.to_string_lossy().to_string());
+        let todos_label = plan_card.todos_total.map(|total| {
+            if total == 1 {
+                "1 to-do".to_string()
+            } else {
+                format!("{total} to-dos")
+            }
+        });
         // Build drives a mode switch through the connection (session modes or the
         // "mode" config option, whichever the agent exposes), so it isn't gated on a
         // mode_selector — external agents that use config options have none.
@@ -8124,79 +8137,146 @@ file. Keep going until every to-do is complete.";
             .border_color(self.tool_card_border_color(cx))
             .overflow_hidden()
             .child(
-                v_flex()
-                    .p_2()
-                    .gap_0p5()
+                h_flex()
+                    .px_2()
+                    .py_1()
+                    .gap_1p5()
+                    .justify_between()
                     .bg(self.tool_card_header_bg(cx))
+                    .border_b_1()
+                    .border_color(self.tool_card_border_color(cx))
                     .child(
-                        Label::new("Created Plan")
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
+                        h_flex()
+                            .gap_1p5()
+                            .child(
+                                Icon::new(IconName::File)
+                                    .size(IconSize::Small)
+                                    .color(Color::Muted),
+                            )
+                            .child(
+                                Label::new("Created Plan")
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                            ),
                     )
-                    .child(
-                        Label::new(title)
-                            .size(LabelSize::Custom(self.tool_name_font_size()))
-                            .truncate(),
-                    )
-                    .when_some(summary, |this, summary| {
+                    .when_some(plan_file_name, |this, plan_file_name| {
                         this.child(
-                            Label::new(summary)
-                                .size(LabelSize::Small)
-                                .color(Color::Muted),
+                            div()
+                                .px_1p5()
+                                .rounded_full()
+                                .bg(cx.theme().colors().element_background)
+                                .border_1()
+                                .border_color(cx.theme().colors().border_variant)
+                                .child(
+                                    Label::new(plan_file_name)
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Muted)
+                                        .buffer_font(cx)
+                                        .truncate(),
+                                ),
                         )
                     }),
             )
             .child(
-                h_flex()
-                    .p_1()
+                v_flex()
+                    .p_2()
                     .gap_1()
-                    .justify_end()
-                    .border_t_1()
-                    .border_color(self.tool_card_border_color(cx))
                     .child(
-                        Button::new(("view-plan", entry_ix), "View Plan")
-                            .label_size(LabelSize::Small)
-                            .on_click(cx.listener(move |this, _event: &ClickEvent, window, cx| {
-                                let path = std::path::PathBuf::from(plan_path.clone());
-                                let _ = this.workspace.update(cx, |workspace, cx| {
-                                    workspace
-                                        .open_abs_path(
-                                            path,
-                                            OpenOptions {
-                                                focus: Some(true),
-                                                ..Default::default()
-                                            },
-                                            window,
-                                            cx,
-                                        )
-                                        .detach();
-                                });
-                            })),
+                        Label::new(title)
+                            .size(LabelSize::Custom(self.tool_name_font_size()))
+                            .weight(gpui::FontWeight::SEMIBOLD)
+                            .truncate(),
                     )
-                    .when(can_build, |this| {
+                    .when_some(summary, |this, summary| {
                         this.child(
-                            Button::new(("build-plan", entry_ix), "Build")
-                                .label_size(LabelSize::Small)
-                                .on_click(cx.listener(
-                                    move |this, _event: &ClickEvent, window, cx| {
-                                        let thread = this.thread.read(cx);
-                                        let session_id = thread.session_id().clone();
-                                        let connection = thread.connection().clone();
-                                        // Leave read-only plan mode for the execution mode. Prefer
-                                        // ACP session modes; fall back to the "mode" config option
-                                        // (external config-option agents advertise no session modes).
-                                        if let Some(modes) = connection.session_modes(&session_id, cx)
-                                        {
-                                            modes
-                                                .set_mode(
-                                                    acp::SessionModeId::new(EXECUTION_MODE_ID),
-                                                    cx,
-                                                )
-                                                .detach();
-                                        } else if let Some(options) =
-                                            connection.session_config_options(&session_id, cx)
-                                        {
-                                            options
+                            div()
+                                .text_size(ui::TextSize::Small.rems(cx))
+                                .text_color(cx.theme().colors().text_muted)
+                                .line_clamp(2)
+                                .child(summary),
+                        )
+                    })
+                    .child(
+                        h_flex()
+                            .mt_1()
+                            .gap_1()
+                            .justify_between()
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .when_some(todos_label, |this, todos_label| {
+                                        this.child(
+                                            Icon::new(IconName::ListTodo)
+                                                .size(IconSize::Small)
+                                                .color(Color::Muted),
+                                        )
+                                        .child(
+                                            Label::new(todos_label)
+                                                .size(LabelSize::Small)
+                                                .color(Color::Muted),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .child(
+                                        Button::new(("view-plan", entry_ix), "View Plan")
+                                            .label_size(LabelSize::Small)
+                                            .color(Color::Muted)
+                                            .on_click(cx.listener(
+                                                move |this, _event: &ClickEvent, window, cx| {
+                                                    let path =
+                                                        std::path::PathBuf::from(plan_path.clone());
+                                                    let _ = this.workspace.update(
+                                                        cx,
+                                                        |workspace, cx| {
+                                                            workspace
+                                                                .open_abs_path(
+                                                                    path,
+                                                                    OpenOptions {
+                                                                        focus: Some(true),
+                                                                        ..Default::default()
+                                                                    },
+                                                                    window,
+                                                                    cx,
+                                                                )
+                                                                .detach();
+                                                        },
+                                                    );
+                                                },
+                                            )),
+                                    )
+                                    .when(can_build, |this| {
+                                        this.child(
+                                            Button::new(("build-plan", entry_ix), "Build")
+                                                .label_size(LabelSize::Small)
+                                                .style(ButtonStyle::Tinted(ui::TintColor::Accent))
+                                                .on_click(cx.listener(
+                                                    move |this, _event: &ClickEvent, window, cx| {
+                                                        let thread = this.thread.read(cx);
+                                                        let session_id =
+                                                            thread.session_id().clone();
+                                                        let connection =
+                                                            thread.connection().clone();
+                                                        // Leave read-only plan mode for the execution mode. Prefer
+                                                        // ACP session modes; fall back to the "mode" config option
+                                                        // (external config-option agents advertise no session modes).
+                                                        if let Some(modes) = connection
+                                                            .session_modes(&session_id, cx)
+                                                        {
+                                                            modes
+                                                                .set_mode(
+                                                                    acp::SessionModeId::new(
+                                                                        EXECUTION_MODE_ID,
+                                                                    ),
+                                                                    cx,
+                                                                )
+                                                                .detach();
+                                                        } else if let Some(options) = connection
+                                                            .session_config_options(&session_id, cx)
+                                                        {
+                                                            options
                                                 .set_config_option(
                                                     acp::SessionConfigId::new("mode"),
                                                     acp::SessionConfigOptionValue::value_id(
@@ -8205,20 +8285,28 @@ file. Keep going until every to-do is complete.";
                                                     cx,
                                                 )
                                                 .detach();
-                                        }
-                                        let contents = vec![acp::ContentBlock::Text(
-                                            acp::TextContent::new(BUILD_PROMPT.to_string()),
-                                        )];
-                                        this.send_content(
-                                            Task::ready(Ok(Some((contents, Vec::new())))),
-                                            false,
-                                            window,
-                                            cx,
-                                        );
-                                    },
-                                )),
-                        )
-                    }),
+                                                        }
+                                                        let contents =
+                                                            vec![acp::ContentBlock::Text(
+                                                                acp::TextContent::new(
+                                                                    BUILD_PROMPT.to_string(),
+                                                                ),
+                                                            )];
+                                                        this.send_content(
+                                                            Task::ready(Ok(Some((
+                                                                contents,
+                                                                Vec::new(),
+                                                            )))),
+                                                            false,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                )),
+                                        )
+                                    }),
+                            ),
+                    ),
             )
             .into_any_element()
     }

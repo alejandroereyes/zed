@@ -305,6 +305,9 @@ pub struct PlanCardInfo {
     /// One-line plan summary, if present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// Number of checklist items in the plan's to-do list, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub todos_total: Option<u64>,
 }
 
 /// Helper to extract the Created Plan card info from ACP meta.
