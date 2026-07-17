@@ -7506,10 +7506,6 @@ impl ThreadView {
                         .child(
                             div()
                                 .id(("thinking-content", chunk_ix))
-                                .ml_1p5()
-                                .pl_3p5()
-                                .border_l_1()
-                                .border_color(self.tool_card_border_color(cx))
                                 .when(is_constrained, |this| this.max_h_64())
                                 .when_some(scroll_handle, |this, scroll_handle| {
                                     this.track_scroll(&scroll_handle)
@@ -7518,15 +7514,16 @@ impl ThreadView {
                                 .child(self.render_markdown(
                                     chunk,
                                     {
-                                        // Italicize thought text so it reads as an
-                                        // aside rather than part of the answer.
+                                        // Muted and header-sized so the thought reads
+                                        // as an aside rather than part of the answer.
                                         let mut style = MarkdownStyle::themed(
                                             MarkdownFont::Agent,
                                             window,
                                             cx,
-                                        );
-                                        style.base_text_style.font_style =
-                                            gpui::FontStyle::Italic;
+                                        )
+                                        .with_muted_text(cx);
+                                        style.base_text_style.font_size =
+                                            self.tool_name_font_size().into();
                                         style
                                     },
                                     cx,
