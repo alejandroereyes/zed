@@ -7504,9 +7504,9 @@ impl ThreadView {
                                                 )
                                                 .into(),
                                             ),
-                                            Animation::new(Duration::from_secs(2))
+                                            Animation::new(Duration::from_secs(1))
                                                 .repeat()
-                                                .with_easing(pulsating_between(0.3, 0.7)),
+                                                .with_easing(pulsating_between(0.6, 1.0)),
                                             |element, delta| element.opacity(delta),
                                         )
                                         .into_any_element()
