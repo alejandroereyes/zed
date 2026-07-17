@@ -10728,9 +10728,9 @@ impl ThreadView {
                                             title_label
                                                 .with_animation(
                                                     ("subagent-title-pulse", entry_ix),
-                                                    Animation::new(Duration::from_secs(2))
+                                                    Animation::new(Duration::from_secs(1))
                                                         .repeat()
-                                                        .with_easing(pulsating_between(0.3, 0.7)),
+                                                        .with_easing(pulsating_between(0.6, 1.0)),
                                                     |label, delta| label.alpha(delta),
                                                 )
                                                 .into_any_element()
