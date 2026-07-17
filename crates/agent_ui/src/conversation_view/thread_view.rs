@@ -8339,7 +8339,13 @@ impl ThreadView {
 
         div().w_full().id(container_id).map(|this| {
             if let Some(plan_card) = tool_call.plan_card.clone() {
-                this.child(self.render_plan_card(entry_ix, &plan_card, cx))
+                // Inset the bordered card so it doesn't sit flush against the
+                // panel edges (standalone tool entries render edge-to-edge).
+                this.child(
+                    div()
+                        .px_2()
+                        .child(self.render_plan_card(entry_ix, &plan_card, cx)),
+                )
             } else if tool_call.is_subagent() {
                 this.child(
                     self.render_subagent_tool_call(
