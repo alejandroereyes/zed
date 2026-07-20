@@ -10720,6 +10720,22 @@ impl ThreadView {
                                     .w_full()
                                     .gap_1p5()
                                     .child(icon)
+                                    .child(
+                                        // A quiet marker so the card reads as a
+                                        // subagent's work, not the main thread's.
+                                        div()
+                                            .flex_none()
+                                            .px_1()
+                                            .rounded_sm()
+                                            .bg(cx.theme().colors().element_background)
+                                            .child(
+                                                Label::new("Subagent")
+                                                    .size(LabelSize::Custom(
+                                                        self.tool_name_font_size(),
+                                                    ))
+                                                    .color(Color::Muted),
+                                            ),
+                                    )
                                     .child({
                                         let title_label = Label::new(title.to_string())
                                             .size(LabelSize::Custom(self.tool_name_font_size()))
