@@ -7514,14 +7514,15 @@ impl ThreadView {
                                 .child(self.render_markdown(
                                     chunk,
                                     {
-                                        // Muted and header-sized so the thought reads
-                                        // as an aside rather than part of the answer.
-                                        let mut style = MarkdownStyle::themed(
-                                            MarkdownFont::Agent,
-                                            window,
-                                            cx,
-                                        )
-                                        .with_muted_text(cx);
+                                        // Header-sized, and distinctly fainter than
+                                        // the answer body so a thought reads as a quiet
+                                        // aside. The themed body is already near-muted,
+                                        // so plain `text_muted` is indistinguishable —
+                                        // fade it further toward the background.
+                                        let mut style =
+                                            MarkdownStyle::themed(MarkdownFont::Agent, window, cx);
+                                        style.base_text_style.color =
+                                            cx.theme().colors().text_muted.opacity(0.65);
                                         style.base_text_style.font_size =
                                             self.tool_name_font_size().into();
                                         style
