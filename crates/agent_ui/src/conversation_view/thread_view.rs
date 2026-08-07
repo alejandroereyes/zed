@@ -6782,15 +6782,21 @@ impl ThreadView {
             if let Some(duration) = worked_for {
                 let header = h_flex()
                     .id(SharedString::from(format!("worked-for-turn-{entry_ix}")))
+                    .group("worked-for-header")
+                    .w_full()
                     .px_5()
                     .py_1()
                     .gap_1p5()
                     .cursor_pointer()
-                    .child(Disclosure::new("worked-for-disclosure", !collapsed))
+                    .tab_index(0)
                     .child(
                         Label::new(format!("Worked for {}", duration_alt_display(duration)))
                             .size(LabelSize::Small)
-                            .color(Color::Muted),
+                            .color(Color::Custom(cx.theme().colors().text.opacity(0.6))),
+                    )
+                    .child(
+                        Disclosure::new("worked-for-disclosure", !collapsed)
+                            .visible_on_hover("worked-for-header"),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.toggle_turn_collapse(entry_ix, window, cx);
