@@ -8150,7 +8150,7 @@ impl ThreadView {
                             .child(
                                 Label::new("Created Plan")
                                     .size(LabelSize::Small)
-                                    .color(Color::Muted),
+                                    .color(Color::Custom(cx.theme().colors().text.opacity(0.6))),
                             ),
                     )
                     .when_some(plan_file_name, |this, plan_file_name| {
@@ -8164,7 +8164,9 @@ impl ThreadView {
                                 .child(
                                     Label::new(plan_file_name)
                                         .size(LabelSize::XSmall)
-                                        .color(Color::Muted)
+                                        .color(Color::Custom(
+                                            cx.theme().colors().text.opacity(0.36),
+                                        ))
                                         .buffer_font(cx)
                                         .truncate(),
                                 ),
@@ -8185,7 +8187,7 @@ impl ThreadView {
                         this.child(
                             div()
                                 .text_size(ui::TextSize::Small.rems(cx))
-                                .text_color(cx.theme().colors().text_muted)
+                                .text_color(cx.theme().colors().text.opacity(0.6))
                                 .line_clamp(2)
                                 .child(summary),
                         )
