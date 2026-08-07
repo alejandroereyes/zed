@@ -10057,9 +10057,6 @@ impl ThreadView {
         // one, so intermediate rows read as compact asides. Falls back to the flat
         // markdown title otherwise.
         let two_tier_label = tool_call.tool_detail.as_ref().map(|detail| {
-            // The verb leads and its argument trails one step quieter, both
-            // stepped down from the primary text color so the pair reads as one
-            // compact aside rather than two unrelated weights.
             let verb_color = Color::Custom(cx.theme().colors().text.opacity(0.74));
             let sub_muted = Color::Custom(cx.theme().colors().text.opacity(0.6));
             h_flex()
