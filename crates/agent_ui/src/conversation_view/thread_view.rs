@@ -4195,15 +4195,17 @@ impl ThreadView {
         };
 
         let label = Label::new(label_text)
-            .color(Color::Muted)
+            .color(Color::Custom(cx.theme().colors().text.opacity(0.6)))
             .size(LabelSize::Small);
 
         h_flex()
             .id(SharedString::from(format!("explored-group-{}", anchor.0)))
+            .group("explored-group-header")
+            .w_full()
             .p_1()
             .gap_1p5()
             .cursor_pointer()
-            .child(Disclosure::new("explored-group-disclosure", expanded))
+            .tab_index(0)
             .map(|this| {
                 if is_live {
                     this.child(label.with_animation(
@@ -4217,6 +4219,10 @@ impl ThreadView {
                     this.child(label)
                 }
             })
+            .child(
+                Disclosure::new("explored-group-disclosure", expanded)
+                    .visible_on_hover("explored-group-header"),
+            )
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.toggle_tool_group_expansion(&anchor, window, cx);
             }))
