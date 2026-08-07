@@ -8467,10 +8467,6 @@ impl ThreadView {
             }
             .into()
         } else if is_collapsible {
-            // A collapsed result shows a short teaser rather than vanishing, so the
-            // row still says what came back and the reader can judge whether to open
-            // it. Only plain content blocks preview; diffs and terminals carry their
-            // own collapsed presentation.
             let preview: Vec<AnyElement> = tool_call
                 .content
                 .iter()
@@ -8516,9 +8512,6 @@ impl ThreadView {
                         )
                         .map(|this| {
                             if is_streaming {
-                                // While a result is still arriving there is nothing to
-                                // click yet, so the clipped edge fades out instead of
-                                // ending abruptly.
                                 this.child(div().absolute().inset_0().size_full().bg(
                                     linear_gradient(
                                         180.,
@@ -8527,9 +8520,6 @@ impl ThreadView {
                                     ),
                                 ))
                             } else {
-                                // Once the result has settled the clipped edge carries a
-                                // chevron instead: the content is final, so the useful
-                                // signal is that the rest is one click away.
                                 this.child(
                                     h_flex()
                                         .absolute()
