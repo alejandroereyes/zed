@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use gpui::{AnyElement, ClickEvent, CursorStyle, Window};
-use ui::{CommonAnimationExt, Disclosure, Divider, DividerColor, Tooltip, prelude::*};
+use ui::{CommonAnimationExt, Divider, DividerColor, Tooltip, prelude::*};
 use util::time::duration_alt_display;
 
 const ELAPSED_DISPLAY_THRESHOLD: Duration = Duration::from_secs(10);
@@ -118,20 +118,68 @@ impl TerminalToolHeader {
     }
 }
 
-/// `cargo, 2+` for `cargo build && cargo test; ls` — the leading command word
-/// plus how many more commands are chained after it.
+/// Five lines of output plus a little breathing room, so a collapsed card shows
+/// what a command returned without growing enough to take over the panel.
+pub const COLLAPSED_OUTPUT_PREVIEW_HEIGHT: Pixels = px(86.);
+
+/// The tail of a command's output, plus whether anything was dropped above it.
+///
+/// The tail rather than the head: for a command that has just run, the last
+/// lines are the result, while the first lines are usually progress noise.
+pub fn collapsed_output_preview(content: &str) -> Option<(String, bool)> {
+    const MAX_LINES: usize = 5;
+    const MAX_CHARS: usize = 2000;
+
+    let trimmed = content.trim_end();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lines: Vec<&str> = trimmed.lines().collect();
+    let first_kept = lines.len().saturating_sub(MAX_LINES);
+    let mut hidden = first_kept > 0;
+    let mut tail = lines[first_kept..].join("\n");
+
+    let char_count = tail.chars().count();
+    if char_count > MAX_CHARS {
+        tail = tail.chars().skip(char_count - MAX_CHARS).collect();
+        hidden = true;
+    }
+
+    Some((tail, hidden))
+}
+
+/// `cargo, ls` for `cargo build && cargo test; ls` — the distinct programs the
+/// command line invokes, in the order they appear. Naming the programs says more
+/// about what a command will do than a count of how many are chained.
 pub fn command_summary_chip(command: &str) -> Option<String> {
-    let segments = command
+    const MAX_NAMES: usize = 5;
+
+    let mut names: Vec<&str> = Vec::new();
+    for segment in command
         .split(['\n', ';', '|'])
         .flat_map(|segment| segment.split("&&"))
+        .flat_map(|segment| segment.split("||"))
         .map(str::trim)
         .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-    let leading_word = segments.first()?.split_whitespace().next()?;
-    if segments.len() > 1 {
-        Some(format!("{leading_word}, {}+", segments.len() - 1))
+    {
+        let Some(program) = segment.split_whitespace().next() else {
+            continue;
+        };
+        if !names.contains(&program) {
+            names.push(program);
+        }
+    }
+
+    if names.is_empty() {
+        return None;
+    }
+    if names.len() > MAX_NAMES {
+        let hidden = names.len() - MAX_NAMES;
+        names.truncate(MAX_NAMES);
+        Some(format!("{} +{hidden}", names.join(", ")))
     } else {
-        Some(leading_word.to_string())
+        Some(names.join(", "))
     }
 }
 
@@ -140,17 +188,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn command_summary_chip_counts_chained_commands() {
+    fn command_summary_chip_lists_distinct_programs() {
         assert_eq!(
             command_summary_chip("cargo build && cargo test; ls").as_deref(),
-            Some("cargo, 2+")
+            Some("cargo, ls")
         );
         assert_eq!(command_summary_chip("ls -la").as_deref(), Some("ls"));
         assert_eq!(
             command_summary_chip("cd /repo && grep -rn foo | head -5").as_deref(),
-            Some("cd, 2+")
+            Some("cd, grep, head")
+        );
+        assert_eq!(
+            command_summary_chip("brew info --json | python3 -c 'x'").as_deref(),
+            Some("brew, python3")
+        );
+        assert_eq!(command_summary_chip("a; b || c").as_deref(), Some("a, b, c"));
+        assert_eq!(
+            command_summary_chip("a; b; c; d; e; f; g").as_deref(),
+            Some("a, b, c, d, e +2")
         );
         assert_eq!(command_summary_chip("   "), None);
+    }
+
+    #[test]
+    fn collapsed_output_preview_keeps_the_tail() {
+        assert_eq!(
+            collapsed_output_preview("one\ntwo\nthree"),
+            Some(("one\ntwo\nthree".to_string(), false))
+        );
+        assert_eq!(
+            collapsed_output_preview("1\n2\n3\n4\n5\n6\n7"),
+            Some(("3\n4\n5\n6\n7".to_string(), true))
+        );
+        assert_eq!(collapsed_output_preview("  \n \n"), None);
+        assert_eq!(collapsed_output_preview(""), None);
+
+        let long = "x".repeat(2500);
+        let (preview, hidden) = collapsed_output_preview(&long).unwrap();
+        assert_eq!(preview.chars().count(), 2000);
+        assert!(hidden);
     }
 }
 
@@ -185,6 +261,41 @@ impl RenderOnce for TerminalToolHeader {
             .element_background
             .blend(cx.theme().colors().editor_foreground.opacity(0.025));
 
+        // The terminal glyph doubles as the expand affordance: it is swapped for a
+        // chevron while the pointer is over the card, so the row keeps a single
+        // leading icon instead of gaining a separate control.
+        let leading_icon = div()
+            .relative()
+            .size(IconSize::Small.rems())
+            .flex_none()
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .group_hover(&hover_group, |this| this.invisible())
+                    .child(
+                        Icon::new(IconName::ToolTerminal)
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
+                    ),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .invisible()
+                    .group_hover(&hover_group, |this| this.visible())
+                    .child(
+                        Icon::new(if is_expanded {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .size(IconSize::Small)
+                        .color(Color::Muted),
+                    ),
+            );
+
         let header_row = h_flex()
             .id(child_id("header"))
             .pt_1()
@@ -194,17 +305,19 @@ impl RenderOnce for TerminalToolHeader {
             .gap_1()
             .justify_between()
             .rounded_t_md()
+            .when_some(on_toggle_expand, |this, handler| {
+                this.cursor_pointer()
+                    .tab_index(0)
+                    .hover(|style| style.bg(header_bg))
+                    .on_click(handler)
+            })
             .child(
                 h_flex()
                     .w_full()
                     .min_w_0()
                     .gap_1p5()
                     .overflow_hidden()
-                    .child(
-                        Icon::new(IconName::ToolTerminal)
-                            .size(IconSize::Small)
-                            .color(Color::Muted),
-                    )
+                    .child(leading_icon)
                     .when_some(command_summary, |this, summary| {
                         this.child(
                             Label::new(summary)
@@ -214,13 +327,6 @@ impl RenderOnce for TerminalToolHeader {
                                 .truncate(),
                         )
                     }),
-            )
-            .child(
-                Disclosure::new(child_id("disclosure"), is_expanded)
-                    .opened_icon(IconName::ChevronUp)
-                    .closed_icon(IconName::ChevronDown)
-                    .visible_on_hover(&hover_group)
-                    .when_some(on_toggle_expand, |this, handler| this.on_click(handler)),
             )
             .when(show_elapsed, |header| {
                 let elapsed = elapsed.unwrap_or_default();

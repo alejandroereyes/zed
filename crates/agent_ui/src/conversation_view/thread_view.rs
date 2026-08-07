@@ -7994,6 +7994,48 @@ impl ThreadView {
             })
             .overflow_hidden()
             .child(header)
+            .when(!is_expanded, |this| {
+                // A collapsed call still reports what came back, so a turn can be
+                // read without opening every command in it.
+                let Some((preview, has_hidden)) = output
+                    .map(|output| output.content.as_str())
+                    .and_then(crate::ui::collapsed_output_preview)
+                else {
+                    return this;
+                };
+                let panel_bg = cx.theme().colors().panel_background;
+
+                this.child(
+                    div()
+                        .relative()
+                        .px_1p5()
+                        .pb_1()
+                        .child(
+                            div()
+                                .max_h(crate::ui::COLLAPSED_OUTPUT_PREVIEW_HEIGHT)
+                                .overflow_hidden()
+                                .child(
+                                    Label::new(preview)
+                                        .buffer_font(cx)
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Custom(
+                                            cx.theme().colors().text.opacity(0.6),
+                                        )),
+                                ),
+                        )
+                        .when(has_hidden, |this| {
+                            // Fades the top, where the clipping happens, since the
+                            // preview is the end of the output rather than its start.
+                            this.child(div().absolute().top_0().left_0().right_0().h_4().bg(
+                                linear_gradient(
+                                    180.,
+                                    linear_color_stop(panel_bg, 0.),
+                                    linear_color_stop(panel_bg.opacity(0.), 1.),
+                                ),
+                            ))
+                        }),
+                )
+            })
             .when(is_expanded && terminal_view.is_some(), |this| {
                 this.child(
                     div()
