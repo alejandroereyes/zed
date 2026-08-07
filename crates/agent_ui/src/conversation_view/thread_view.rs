@@ -7516,12 +7516,6 @@ impl ThreadView {
                                 .child(self.render_markdown(
                                     chunk,
                                     {
-                                        // Thoughts match the answer body in size and weight
-                                        // and are de-emphasized by color alone, so a thought
-                                        // reads as a quiet aside without becoming a
-                                        // differently-shaped block of text. The faintest
-                                        // ramp step: expanded thought prose sits well below
-                                        // the tool rows around it.
                                         let mut style =
                                             MarkdownStyle::themed(MarkdownFont::Agent, window, cx);
                                         style.base_text_style.color =
@@ -11014,12 +11008,9 @@ impl ThreadView {
         cx.theme().colors().border.opacity(0.8)
     }
 
-    // De-emphasis ramp for conversation text. Quieter surfaces step down from
-    // the primary text color by fixed opacity, so every muted surface reads as
-    // a known fraction of the same base. Anchoring all steps on `text` (rather
-    // than mixing in the theme's separately-authored `text_muted` token) keeps
-    // the steps evenly spaced and lets neighboring surfaces be tuned relative
-    // to one another instead of blind.
+    // Anchored on `text` rather than `text_muted`: the theme authors those two
+    // independently, so only a fixed fraction of `text` keeps the steps evenly
+    // spaced across themes.
     fn agent_text_secondary(&self, cx: &Context<Self>) -> Hsla {
         cx.theme().colors().text.opacity(0.74)
     }
