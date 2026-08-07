@@ -118,14 +118,10 @@ impl TerminalToolHeader {
     }
 }
 
-/// Five lines of output plus a little breathing room, so a collapsed card shows
-/// what a command returned without growing enough to take over the panel.
+/// Five lines of output plus a line of breathing room.
 pub const COLLAPSED_OUTPUT_PREVIEW_HEIGHT: Pixels = px(86.);
 
 /// The tail of a command's output, plus whether anything was dropped above it.
-///
-/// The tail rather than the head: for a command that has just run, the last
-/// lines are the result, while the first lines are usually progress noise.
 pub fn collapsed_output_preview(content: &str) -> Option<(String, bool)> {
     const MAX_LINES: usize = 5;
     const MAX_CHARS: usize = 2000;
@@ -150,8 +146,7 @@ pub fn collapsed_output_preview(content: &str) -> Option<(String, bool)> {
 }
 
 /// `cargo, ls` for `cargo build && cargo test; ls` — the distinct programs the
-/// command line invokes, in the order they appear. Naming the programs says more
-/// about what a command will do than a count of how many are chained.
+/// command line invokes, in the order they appear.
 pub fn command_summary_chip(command: &str) -> Option<String> {
     const MAX_NAMES: usize = 5;
 
@@ -261,9 +256,6 @@ impl RenderOnce for TerminalToolHeader {
             .element_background
             .blend(cx.theme().colors().editor_foreground.opacity(0.025));
 
-        // The terminal glyph doubles as the expand affordance: it is swapped for a
-        // chevron while the pointer is over the card, so the row keeps a single
-        // leading icon instead of gaining a separate control.
         let leading_icon = div()
             .relative()
             .size(IconSize::Small.rems())
@@ -411,8 +403,6 @@ impl RenderOnce for TerminalToolHeader {
         v_flex()
             .group(hover_group)
             .text_xs()
-            // The header fill belongs to the expanded card; a collapsed call
-            // stays a flat line on the panel background.
             .when(is_expanded, |this| this.bg(header_bg))
             .child(header_row)
             // The collapsed card is just the identity row; the directory and

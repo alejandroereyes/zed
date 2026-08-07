@@ -7977,9 +7977,6 @@ impl ThreadView {
 
         v_flex()
             .when(layout == ToolCallLayout::Standalone, |this| {
-                // A terminal call keeps its card chrome in both states: now that a
-                // collapsed call shows its output, the border is what separates that
-                // output from the surrounding turn.
                 this.mx_5()
                     .my_1p5()
                     .border_1()
@@ -7990,8 +7987,6 @@ impl ThreadView {
             .overflow_hidden()
             .child(header)
             .when(!is_expanded, |this| {
-                // A collapsed call still reports what came back, so a turn can be
-                // read without opening every command in it.
                 let Some((preview, has_hidden)) = output
                     .map(|output| output.content.as_str())
                     .and_then(crate::ui::collapsed_output_preview)
@@ -8022,8 +8017,8 @@ impl ThreadView {
                                 ),
                         )
                         .when(has_hidden, |this| {
-                            // Fades the top, where the clipping happens, since the
-                            // preview is the end of the output rather than its start.
+                            // Top, not bottom: the preview is the tail of the output,
+                            // so the clipped edge is above it.
                             this.child(div().absolute().top_0().left_0().right_0().h_4().bg(
                                 linear_gradient(
                                     180.,
