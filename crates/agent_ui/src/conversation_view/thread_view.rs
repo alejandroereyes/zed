@@ -3735,7 +3735,7 @@ impl ThreadView {
                                 div().pr_0p5().bg(self.activity_bar_bg(cx)).child(
                                     Label::new(format!("{} left", stats.pending))
                                         .size(LabelSize::Small)
-                                        .color(Color::Muted),
+                                        .color(Color::Custom(self.agent_text_tertiary(cx))),
                                 ),
                             ),
                     )
@@ -4100,6 +4100,7 @@ impl ThreadView {
                 h_flex()
                     .id("edits-container")
                     .cursor_pointer()
+                    .tab_index(0)
                     .gap_1()
                     .child(Disclosure::new("edits-disclosure", expanded))
                     .map(|this| {
@@ -4114,7 +4115,7 @@ impl ThreadView {
                                         "files"
                                     }
                                 ))
-                                .color(Color::Muted)
+                                .color(Color::Custom(self.agent_text_tertiary(cx)))
                                 .size(LabelSize::Small)
                                 .with_animation(
                                     "edit-label",
@@ -4135,7 +4136,7 @@ impl ThreadView {
                             this.child(
                                 Label::new("Edits")
                                     .size(LabelSize::Small)
-                                    .color(Color::Muted),
+                                    .color(Color::Custom(self.agent_text_tertiary(cx))),
                             )
                             .child(dot_divider())
                             .child(
@@ -4149,7 +4150,7 @@ impl ThreadView {
                                     }
                                 ))
                                 .size(LabelSize::Small)
-                                .color(Color::Muted),
+                                .color(Color::Custom(self.agent_text_tertiary(cx))),
                             )
                             .child(dot_divider())
                             .child(DiffStat::new(
@@ -7468,7 +7469,8 @@ impl ThreadView {
                     .relative()
                     .w_full()
                     .pr_1()
-                    .justify_between()
+                    .gap_1p5()
+                    .tab_index(0)
                     .child(
                         h_flex()
                             .h(window.line_height() - px(2.))
@@ -7482,7 +7484,7 @@ impl ThreadView {
                             .child(
                                 div()
                                     .text_size(self.tool_name_font_size())
-                                    .text_color(cx.theme().colors().text_muted)
+                                    .text_color(self.agent_text_tertiary(cx))
                                     .child("Thinking"),
                             ),
                     )
@@ -7514,17 +7516,16 @@ impl ThreadView {
                                 .child(self.render_markdown(
                                     chunk,
                                     {
-                                        // Header-sized, and distinctly fainter than
-                                        // the answer body so a thought reads as a quiet
-                                        // aside. The themed body is already near-muted,
-                                        // so plain `text_muted` is indistinguishable —
-                                        // fade it further toward the background.
+                                        // Thoughts match the answer body in size and weight
+                                        // and are de-emphasized by color alone, so a thought
+                                        // reads as a quiet aside without becoming a
+                                        // differently-shaped block of text. The faintest
+                                        // ramp step: expanded thought prose sits well below
+                                        // the tool rows around it.
                                         let mut style =
                                             MarkdownStyle::themed(MarkdownFont::Agent, window, cx);
                                         style.base_text_style.color =
-                                            cx.theme().colors().text_muted.opacity(0.65);
-                                        style.base_text_style.font_size =
-                                            self.tool_name_font_size().into();
+                                            self.agent_text_quaternary(cx);
                                         style
                                     },
                                     cx,
@@ -10084,7 +10085,7 @@ impl ThreadView {
                         if use_card_layout {
                             this.text_color(cx.theme().colors().text)
                         } else {
-                            this.text_color(cx.theme().colors().text_muted)
+                            this.text_color(self.agent_text_tertiary(cx))
                         }
                     })
                     .child(
@@ -10092,8 +10093,7 @@ impl ThreadView {
                             tool_call.label.clone(),
                             MarkdownStyle {
                                 prevent_mouse_interaction: true,
-                                ..MarkdownStyle::themed(MarkdownFont::Agent, window, cx)
-                                    .with_muted_text(cx)
+                                ..self.tool_title_markdown_style(window, cx)
                             },
                             cx,
                         ),
@@ -10108,7 +10108,7 @@ impl ThreadView {
                     .w_full()
                     .child(self.render_markdown(
                         tool_call.label.clone(),
-                        MarkdownStyle::themed(MarkdownFont::Agent, window, cx).with_muted_text(cx),
+                        self.tool_title_markdown_style(window, cx),
                         cx,
                     ))
                     .into_any()
@@ -10455,7 +10455,7 @@ impl ThreadView {
                 }
             })
             .text_xs()
-            .text_color(cx.theme().colors().text_muted)
+            .text_color(self.agent_text_secondary(cx))
             .child(output)
             .into_any_element()
     }
@@ -11012,6 +11012,30 @@ impl ThreadView {
 
     fn tool_card_border_color(&self, cx: &Context<Self>) -> Hsla {
         cx.theme().colors().border.opacity(0.8)
+    }
+
+    // De-emphasis ramp for conversation text. Quieter surfaces step down from
+    // the primary text color by fixed opacity, so every muted surface reads as
+    // a known fraction of the same base. Anchoring all steps on `text` (rather
+    // than mixing in the theme's separately-authored `text_muted` token) keeps
+    // the steps evenly spaced and lets neighboring surfaces be tuned relative
+    // to one another instead of blind.
+    fn agent_text_secondary(&self, cx: &Context<Self>) -> Hsla {
+        cx.theme().colors().text.opacity(0.74)
+    }
+
+    fn agent_text_tertiary(&self, cx: &Context<Self>) -> Hsla {
+        cx.theme().colors().text.opacity(0.6)
+    }
+
+    fn agent_text_quaternary(&self, cx: &Context<Self>) -> Hsla {
+        cx.theme().colors().text.opacity(0.36)
+    }
+
+    fn tool_title_markdown_style(&self, window: &Window, cx: &Context<Self>) -> MarkdownStyle {
+        let mut style = MarkdownStyle::themed(MarkdownFont::Agent, window, cx);
+        style.base_text_style.color = self.agent_text_secondary(cx);
+        style
     }
 
     fn tool_name_font_size(&self) -> Rems {
