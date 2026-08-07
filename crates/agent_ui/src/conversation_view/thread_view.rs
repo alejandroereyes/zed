@@ -8497,6 +8497,10 @@ impl ThreadView {
             } else {
                 let panel_bg = cx.theme().colors().panel_background;
                 let tool_call_id = tool_call.id.clone();
+                let is_streaming = matches!(
+                    tool_call.status,
+                    ToolCallStatus::Pending | ToolCallStatus::InProgress
+                );
 
                 Some(
                     div()
@@ -8510,15 +8514,44 @@ impl ThreadView {
                                 .overflow_hidden()
                                 .children(preview),
                         )
-                        .child(
-                            // Fades the last quarter of the teaser so the clamp reads
-                            // as "there is more" rather than as a hard cut.
-                            div().absolute().inset_0().size_full().bg(linear_gradient(
-                                180.,
-                                linear_color_stop(panel_bg.opacity(0.), 0.75),
-                                linear_color_stop(panel_bg, 1.),
-                            )),
-                        )
+                        .map(|this| {
+                            if is_streaming {
+                                // While a result is still arriving there is nothing to
+                                // click yet, so the clipped edge fades out instead of
+                                // ending abruptly.
+                                this.child(div().absolute().inset_0().size_full().bg(
+                                    linear_gradient(
+                                        180.,
+                                        linear_color_stop(panel_bg.opacity(0.), 0.75),
+                                        linear_color_stop(panel_bg, 1.),
+                                    ),
+                                ))
+                            } else {
+                                // Once the result has settled the clipped edge carries a
+                                // chevron instead: the content is final, so the useful
+                                // signal is that the rest is one click away.
+                                this.child(
+                                    h_flex()
+                                        .absolute()
+                                        .bottom_0()
+                                        .left_0()
+                                        .right_0()
+                                        .h_5()
+                                        .justify_center()
+                                        .items_end()
+                                        .bg(linear_gradient(
+                                            180.,
+                                            linear_color_stop(panel_bg.opacity(0.), 0.),
+                                            linear_color_stop(panel_bg, 1.),
+                                        ))
+                                        .child(
+                                            Icon::new(IconName::ChevronDown)
+                                                .size(IconSize::XSmall)
+                                                .color(Color::Muted),
+                                        ),
+                                )
+                            }
+                        })
                         .on_click(cx.listener({
                             move |this: &mut Self, _, window, cx: &mut Context<Self>| {
                                 this.entry_view_state.update(cx, |state, _cx| {
