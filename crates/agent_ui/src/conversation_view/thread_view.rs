@@ -7977,20 +7977,15 @@ impl ThreadView {
 
         v_flex()
             .when(layout == ToolCallLayout::Standalone, |this| {
-                this.mx_5().map(|this| {
-                    // Collapsed terminal calls read as flat activity lines,
-                    // like read/search rows; the card chrome belongs to the
-                    // expanded view.
-                    if is_expanded {
-                        this.my_1p5()
-                            .border_1()
-                            .when(tool_failed || command_failed, |card| card.border_dashed())
-                            .border_color(border_color)
-                            .rounded_md()
-                    } else {
-                        this.my_1()
-                    }
-                })
+                // A terminal call keeps its card chrome in both states: now that a
+                // collapsed call shows its output, the border is what separates that
+                // output from the surrounding turn.
+                this.mx_5()
+                    .my_1p5()
+                    .border_1()
+                    .when(tool_failed || command_failed, |card| card.border_dashed())
+                    .border_color(border_color)
+                    .rounded_md()
             })
             .overflow_hidden()
             .child(header)
@@ -8003,13 +7998,16 @@ impl ThreadView {
                 else {
                     return this;
                 };
-                let panel_bg = cx.theme().colors().panel_background;
+                let card_bg = cx.theme().colors().editor_background;
 
                 this.child(
                     div()
                         .relative()
                         .px_1p5()
+                        .pt_1()
                         .pb_1()
+                        .bg(card_bg)
+                        .rounded_b_md()
                         .child(
                             div()
                                 .max_h(crate::ui::COLLAPSED_OUTPUT_PREVIEW_HEIGHT)
@@ -8029,8 +8027,8 @@ impl ThreadView {
                             this.child(div().absolute().top_0().left_0().right_0().h_4().bg(
                                 linear_gradient(
                                     180.,
-                                    linear_color_stop(panel_bg, 0.),
-                                    linear_color_stop(panel_bg.opacity(0.), 1.),
+                                    linear_color_stop(card_bg, 0.),
+                                    linear_color_stop(card_bg.opacity(0.), 1.),
                                 ),
                             ))
                         }),
