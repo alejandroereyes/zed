@@ -8466,6 +8466,71 @@ impl ThreadView {
                 ToolCallStatus::Rejected => Empty.into_any(),
             }
             .into()
+        } else if is_collapsible {
+            // A collapsed result shows a short teaser rather than vanishing, so the
+            // row still says what came back and the reader can judge whether to open
+            // it. Only plain content blocks preview; diffs and terminals carry their
+            // own collapsed presentation.
+            let preview: Vec<AnyElement> = tool_call
+                .content
+                .iter()
+                .enumerate()
+                .filter(|(_, content)| matches!(content, ToolCallContent::ContentBlock(_)))
+                .map(|(content_ix, content)| {
+                    self.render_tool_call_content(
+                        active_session_id,
+                        entry_ix,
+                        content,
+                        content_ix,
+                        tool_call,
+                        use_card_layout,
+                        failed_or_canceled,
+                        focus_handle,
+                        window,
+                        cx,
+                    )
+                })
+                .collect();
+
+            if preview.is_empty() {
+                None
+            } else {
+                let panel_bg = cx.theme().colors().panel_background;
+                let tool_call_id = tool_call.id.clone();
+
+                Some(
+                    div()
+                        .id(("tool-output-preview", entry_ix))
+                        .relative()
+                        .w_full()
+                        .cursor_pointer()
+                        .child(
+                            div()
+                                .max_h(Self::COLLAPSED_OUTPUT_PREVIEW_HEIGHT)
+                                .overflow_hidden()
+                                .children(preview),
+                        )
+                        .child(
+                            // Fades the last quarter of the teaser so the clamp reads
+                            // as "there is more" rather than as a hard cut.
+                            div().absolute().inset_0().size_full().bg(linear_gradient(
+                                180.,
+                                linear_color_stop(panel_bg.opacity(0.), 0.75),
+                                linear_color_stop(panel_bg, 1.),
+                            )),
+                        )
+                        .on_click(cx.listener({
+                            move |this: &mut Self, _, window, cx: &mut Context<Self>| {
+                                this.entry_view_state.update(cx, |state, _cx| {
+                                    state.expand_tool_call(tool_call_id.clone());
+                                });
+                                this.refresh_thread_search(window, cx);
+                                cx.notify();
+                            }
+                        }))
+                        .into_any(),
+                )
+            }
         } else {
             None
         };
@@ -11049,6 +11114,9 @@ impl ThreadView {
     fn tool_card_border_color(&self, cx: &Context<Self>) -> Hsla {
         cx.theme().colors().border.opacity(0.8)
     }
+
+    /// Height of the teaser shown for a collapsed tool result.
+    const COLLAPSED_OUTPUT_PREVIEW_HEIGHT: Pixels = px(80.);
 
     fn tool_name_font_size(&self) -> Rems {
         rems_from_px(13_f32)
