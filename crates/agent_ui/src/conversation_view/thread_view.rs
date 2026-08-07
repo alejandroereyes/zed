@@ -8466,7 +8466,15 @@ impl ThreadView {
                 ToolCallStatus::Rejected => Empty.into_any(),
             }
             .into()
-        } else if is_collapsible {
+        } else if is_collapsible
+            && !matches!(
+                tool_call.kind,
+                // Read, search and fetch results reach the reader through the row's
+                // hover preview, so previewing them inline as well would stack a
+                // block of text under every one of them.
+                acp::ToolKind::Read | acp::ToolKind::Search | acp::ToolKind::Fetch
+            )
+        {
             let preview: Vec<AnyElement> = tool_call
                 .content
                 .iter()
