@@ -3735,7 +3735,7 @@ impl ThreadView {
                                 div().pr_0p5().bg(self.activity_bar_bg(cx)).child(
                                     Label::new(format!("{} left", stats.pending))
                                         .size(LabelSize::Small)
-                                        .color(Color::Muted),
+                                        .color(Color::Custom(self.agent_text_tertiary(cx))),
                                 ),
                             ),
                     )
@@ -4100,6 +4100,7 @@ impl ThreadView {
                 h_flex()
                     .id("edits-container")
                     .cursor_pointer()
+                    .tab_index(0)
                     .gap_1()
                     .child(Disclosure::new("edits-disclosure", expanded))
                     .map(|this| {
@@ -4114,7 +4115,7 @@ impl ThreadView {
                                         "files"
                                     }
                                 ))
-                                .color(Color::Muted)
+                                .color(Color::Custom(self.agent_text_tertiary(cx)))
                                 .size(LabelSize::Small)
                                 .with_animation(
                                     "edit-label",
@@ -4135,7 +4136,7 @@ impl ThreadView {
                             this.child(
                                 Label::new("Edits")
                                     .size(LabelSize::Small)
-                                    .color(Color::Muted),
+                                    .color(Color::Custom(self.agent_text_tertiary(cx))),
                             )
                             .child(dot_divider())
                             .child(
@@ -4149,7 +4150,7 @@ impl ThreadView {
                                     }
                                 ))
                                 .size(LabelSize::Small)
-                                .color(Color::Muted),
+                                .color(Color::Custom(self.agent_text_tertiary(cx))),
                             )
                             .child(dot_divider())
                             .child(DiffStat::new(
@@ -6205,17 +6206,17 @@ impl ThreadView {
                             .relative()
                             .child(
                                 div()
-                                    .py_3()
-                                    .px_2()
+                                    .py_2()
+                                    .px_3()
                                     .rounded_md()
-                                    .bg(cx.theme().colors().editor_background)
+                                    .bg(cx.theme().colors().panel_background)
                                     .border_1()
                                     .when(is_indented, |this| {
                                         this.py_2().px_2().when(opaque_window, |this| {
                                             this.shadow_sm()
                                         })
                                     })
-                                    .border_color(cx.theme().colors().border)
+                                    .border_color(cx.theme().colors().panel_background)
                                     .map(|this| {
                                         if !is_editable {
                                             if is_subagent {
@@ -6376,7 +6377,7 @@ impl ThreadView {
                 } else {
                     v_flex()
                         .px_5()
-                        .py_1p5()
+                        .py_2()
                         .when(is_last, |this| this.pb_4())
                         .w_full()
                         .text_ui(cx)
@@ -7468,7 +7469,8 @@ impl ThreadView {
                     .relative()
                     .w_full()
                     .pr_1()
-                    .justify_between()
+                    .gap_1p5()
+                    .tab_index(0)
                     .child(
                         h_flex()
                             .h(window.line_height() - px(2.))
@@ -7482,7 +7484,7 @@ impl ThreadView {
                             .child(
                                 div()
                                     .text_size(self.tool_name_font_size())
-                                    .text_color(cx.theme().colors().text_muted)
+                                    .text_color(self.agent_text_tertiary(cx))
                                     .child("Thinking"),
                             ),
                     )
@@ -7506,10 +7508,6 @@ impl ThreadView {
                         .child(
                             div()
                                 .id(("thinking-content", chunk_ix))
-                                .ml_1p5()
-                                .pl_3p5()
-                                .border_l_1()
-                                .border_color(self.tool_card_border_color(cx))
                                 .when(is_constrained, |this| this.max_h_64())
                                 .when_some(scroll_handle, |this, scroll_handle| {
                                     this.track_scroll(&scroll_handle)
@@ -7517,7 +7515,13 @@ impl ThreadView {
                                 .overflow_hidden()
                                 .child(self.render_markdown(
                                     chunk,
-                                    MarkdownStyle::themed(MarkdownFont::Agent, window, cx),
+                                    {
+                                        let mut style =
+                                            MarkdownStyle::themed(MarkdownFont::Agent, window, cx);
+                                        style.base_text_style.color =
+                                            self.agent_text_quaternary(cx);
+                                        style
+                                    },
                                     cx,
                                 )),
                         )
@@ -10171,9 +10175,9 @@ impl ThreadView {
                     } else {
                         this.bg(linear_gradient(
                             90.,
-                            linear_color_stop(cx.theme().colors().panel_background, 1.),
+                            linear_color_stop(cx.theme().colors().editor_background, 1.),
                             linear_color_stop(
-                                cx.theme().colors().panel_background.opacity(0.2),
+                                cx.theme().colors().editor_background.opacity(0.2),
                                 0.,
                             ),
                         ))
@@ -10203,7 +10207,7 @@ impl ThreadView {
                         if use_card_layout {
                             this.text_color(cx.theme().colors().text)
                         } else {
-                            this.text_color(cx.theme().colors().text_muted)
+                            this.text_color(self.agent_text_tertiary(cx))
                         }
                     })
                     .child(
@@ -10211,8 +10215,7 @@ impl ThreadView {
                             tool_call.label.clone(),
                             MarkdownStyle {
                                 prevent_mouse_interaction: true,
-                                ..MarkdownStyle::themed(MarkdownFont::Agent, window, cx)
-                                    .with_muted_text(cx)
+                                ..self.tool_title_markdown_style(window, cx)
                             },
                             cx,
                         ),
@@ -10227,7 +10230,7 @@ impl ThreadView {
                     .w_full()
                     .child(self.render_markdown(
                         tool_call.label.clone(),
-                        MarkdownStyle::themed(MarkdownFont::Agent, window, cx).with_muted_text(cx),
+                        self.tool_title_markdown_style(window, cx),
                         cx,
                     ))
                     .into_any()
@@ -10574,7 +10577,7 @@ impl ThreadView {
                 }
             })
             .text_xs()
-            .text_color(cx.theme().colors().text_muted)
+            .text_color(self.agent_text_secondary(cx))
             .child(
                 // Cap expanded tool output so a single long result (a large
                 // file read, verbose command output) can't consume the whole
@@ -11148,6 +11151,27 @@ impl ThreadView {
 
     /// Height of the teaser shown for a collapsed tool result.
     const COLLAPSED_OUTPUT_PREVIEW_HEIGHT: Pixels = px(80.);
+
+    // Anchored on `text` rather than `text_muted`: the theme authors those two
+    // independently, so only a fixed fraction of `text` keeps the steps evenly
+    // spaced across themes.
+    fn agent_text_secondary(&self, cx: &Context<Self>) -> Hsla {
+        cx.theme().colors().text.opacity(0.74)
+    }
+
+    fn agent_text_tertiary(&self, cx: &Context<Self>) -> Hsla {
+        cx.theme().colors().text.opacity(0.6)
+    }
+
+    fn agent_text_quaternary(&self, cx: &Context<Self>) -> Hsla {
+        cx.theme().colors().text.opacity(0.36)
+    }
+
+    fn tool_title_markdown_style(&self, window: &Window, cx: &Context<Self>) -> MarkdownStyle {
+        let mut style = MarkdownStyle::themed(MarkdownFont::Agent, window, cx);
+        style.base_text_style.color = self.agent_text_secondary(cx);
+        style
+    }
 
     fn tool_name_font_size(&self) -> Rems {
         rems_from_px(13_f32)
