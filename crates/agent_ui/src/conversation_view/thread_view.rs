@@ -10772,6 +10772,16 @@ impl ThreadView {
             "Spawning Agent…".into()
         };
 
+        let model_badge: Option<SharedString> =
+            tool_call.subagent_session_info.as_ref().and_then(|info| {
+                let model = info.model.as_deref().filter(|value| !value.is_empty())?;
+                let badge = match info.effort.as_deref().filter(|value| !value.is_empty()) {
+                    Some(effort) => format!("{model} {effort}"),
+                    None => model.to_string(),
+                };
+                Some(badge.into())
+            });
+
         let card_header_id = format!("subagent-header-{}", entry_ix);
         let status_icon = format!("status-icon-{}", entry_ix);
         let diff_stat_id = format!("subagent-diff-{}", entry_ix);
@@ -10855,10 +10865,46 @@ impl ThreadView {
                                     .gap_1p5()
                                     .child(icon)
                                     .child(
-                                        Label::new(title.to_string())
-                                            .size(LabelSize::Custom(self.tool_name_font_size()))
-                                            .truncate(),
+                                        // A quiet marker so the card reads as a
+                                        // subagent's work, not the main thread's.
+                                        div()
+                                            .flex_none()
+                                            .px_1()
+                                            .rounded_sm()
+                                            .bg(cx.theme().colors().element_background)
+                                            .child(
+                                                Label::new("Subagent")
+                                                    .size(LabelSize::Custom(
+                                                        self.tool_name_font_size(),
+                                                    ))
+                                                    .color(Color::Muted),
+                                            ),
                                     )
+                                    .child({
+                                        let title_label = Label::new(title.to_string())
+                                            .size(LabelSize::Custom(self.tool_name_font_size()))
+                                            .truncate();
+                                        if is_running {
+                                            title_label
+                                                .with_animation(
+                                                    ("subagent-title-pulse", entry_ix),
+                                                    Animation::new(Duration::from_secs(1))
+                                                        .repeat()
+                                                        .with_easing(pulsating_between(0.6, 1.0)),
+                                                    |label, delta| label.alpha(delta),
+                                                )
+                                                .into_any_element()
+                                        } else {
+                                            title_label.into_any_element()
+                                        }
+                                    })
+                                    .when_some(model_badge, |this, badge| {
+                                        this.child(
+                                            Label::new(format!("· {badge}"))
+                                                .size(LabelSize::Custom(self.tool_name_font_size()))
+                                                .color(Color::Muted),
+                                        )
+                                    })
                                     .when(files_changed > 0, |this| {
                                         this.child(
                                             Label::new(format!(
