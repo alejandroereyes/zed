@@ -6497,7 +6497,14 @@ impl ThreadView {
                                     )
                                 })
                             }
-                            AssistantMessageChunk::Thought { block, .. } => {
+                            AssistantMessageChunk::Thought {
+                                block,
+                                started_at,
+                                duration,
+                                ..
+                            } => {
+                                let label = thinking_block_label(*started_at, *duration);
+                                let is_thinking = started_at.is_some();
                                 block.markdown().and_then(|md| {
                                     let this_is_blank = md.read(cx).source().trim().is_empty();
                                     is_blank = is_blank && this_is_blank;
@@ -6508,6 +6515,8 @@ impl ThreadView {
                                         self.render_thinking_block(
                                             entry_ix,
                                             chunk_ix,
+                                            label.clone(),
+                                            is_thinking,
                                             md.clone(),
                                             window,
                                             cx,
@@ -7634,6 +7643,8 @@ impl ThreadView {
         &self,
         entry_ix: usize,
         chunk_ix: usize,
+        label: SharedString,
+        is_thinking: bool,
         chunk: Entity<Markdown>,
         window: &Window,
         cx: &Context<Self>,
@@ -7679,12 +7690,30 @@ impl ThreadView {
                                     .size(IconSize::Small)
                                     .color(Color::Muted),
                             )
-                            .child(
-                                div()
+                            .child({
+                                let label_element = div()
                                     .text_size(self.tool_name_font_size())
                                     .text_color(self.agent_text_tertiary(cx))
-                                    .child("Thinking"),
-                            ),
+                                    .child(label);
+                                if is_thinking {
+                                    label_element
+                                        .with_animation(
+                                            ElementId::Name(
+                                                format!(
+                                                    "thinking-label-pulse-{entry_ix}-{chunk_ix}"
+                                                )
+                                                .into(),
+                                            ),
+                                            Animation::new(Duration::from_secs(1))
+                                                .repeat()
+                                                .with_easing(pulsating_between(0.6, 1.0)),
+                                            |element, delta| element.opacity(delta),
+                                        )
+                                        .into_any_element()
+                                } else {
+                                    label_element.into_any_element()
+                                }
+                            }),
                     )
                     .child(
                         Disclosure::new(("expand", entry_ix), is_open)
@@ -13156,6 +13185,26 @@ mod tests {
     use util::path;
     use workspace::MultiWorkspace;
 
+    #[test]
+    fn thinking_block_label_by_state() {
+        // Live thought.
+        assert_eq!(
+            thinking_block_label(Some(std::time::Instant::now()), None),
+            "Thinking"
+        );
+        // Settled thoughts carry their duration.
+        assert_eq!(
+            thinking_block_label(None, Some(Duration::from_millis(400))),
+            "Thought briefly"
+        );
+        assert_eq!(
+            thinking_block_label(None, Some(Duration::from_secs(16))),
+            "Thought for 16s"
+        );
+        // Replayed history has no timing.
+        assert_eq!(thinking_block_label(None, None), "Thought process");
+    }
+
     fn native_command(name: &str) -> acp::AvailableCommand {
         acp::AvailableCommand::new(name, "").meta(acp_thread::meta_with_command_category(
             acp_thread::CommandCategory::Native,
@@ -13455,4 +13504,24 @@ pub(crate) fn reset_fast_mode_warnings(cx: &mut App) {
             .log_err();
     })
     .detach();
+}
+
+/// Label for a thinking block: live thoughts read "Thinking", settled ones
+/// carry their duration, and replayed history (which has no timing) falls
+/// back to a neutral past tense.
+fn thinking_block_label(
+    started_at: Option<std::time::Instant>,
+    duration: Option<Duration>,
+) -> SharedString {
+    if started_at.is_some() {
+        return "Thinking".into();
+    }
+    match duration {
+        Some(duration) if duration < Duration::from_secs(1) => "Thought briefly".into(),
+        Some(duration) if duration < Duration::from_secs(60) => {
+            format!("Thought for {}s", duration.as_secs()).into()
+        }
+        Some(duration) => format!("Thought for {}", duration_alt_display(duration)).into(),
+        None => "Thought process".into(),
+    }
 }
