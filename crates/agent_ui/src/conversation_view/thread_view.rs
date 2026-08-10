@@ -8272,6 +8272,7 @@ impl ThreadView {
             .as_ref()
             .map(|path| path.display().to_string());
 
+        let is_running = !command_finished && !needs_confirmation;
         let command_element = self.render_collapsible_command(
             header_group.clone(),
             false,
@@ -8279,6 +8280,22 @@ impl ThreadView {
             window,
             cx,
         );
+        // Shimmer the command line while the command is in flight; the pulse is
+        // gated on the running status, so it settles the instant the command ends.
+        let command_element = if is_running {
+            div()
+                .child(command_element)
+                .with_animation(
+                    ("terminal-command-pulse", entry_ix),
+                    Animation::new(Duration::from_secs(1))
+                        .repeat()
+                        .with_easing(pulsating_between(0.6, 1.0)),
+                    |element, delta| element.opacity(delta),
+                )
+                .into_any_element()
+        } else {
+            command_element.into_any_element()
+        };
 
         let command_source = tool_call.label.read(cx).source().to_string();
         let command_summary = crate::ui::command_summary_chip(
@@ -8330,7 +8347,7 @@ impl ThreadView {
         }
         let header = header
             .elapsed(time_elapsed)
-        .running(!command_finished && !needs_confirmation)
+            .running(is_running)
         .on_toggle_expand(cx.listener({
             let id = tool_call.id.clone();
             move |this, _event, window, cx| {
@@ -8856,6 +8873,29 @@ impl ThreadView {
         })
     }
 
+    // Shimmer in-flight headers: pulse the element's opacity while the tool
+    // runs, settling the instant it completes. Confirmation prompts stay
+    // static because the tool is waiting on the user, not working.
+    fn pulse_while_running(
+        element: Div,
+        animation_id: impl Into<ElementId>,
+        is_running: bool,
+    ) -> AnyElement {
+        if is_running {
+            element
+                .with_animation(
+                    animation_id,
+                    Animation::new(Duration::from_secs(1))
+                        .repeat()
+                        .with_easing(pulsating_between(0.6, 1.0)),
+                    |element, delta| element.opacity(delta),
+                )
+                .into_any_element()
+        } else {
+            element.into_any_element()
+        }
+    }
+
     fn render_tool_call(
         &self,
         active_session_id: &acp::SessionId,
@@ -8877,6 +8917,10 @@ impl ThreadView {
         let needs_confirmation = matches!(
             tool_call.status,
             ToolCallStatus::WaitingForConfirmation { .. }
+        );
+        let is_running = matches!(
+            tool_call.status,
+            ToolCallStatus::Pending | ToolCallStatus::InProgress
         );
         let is_terminal_tool = matches!(tool_call.kind, acp::ToolKind::Execute);
 
@@ -9264,12 +9308,16 @@ impl ThreadView {
         let body = v_flex()
             .map(|this| {
                 if is_terminal_tool {
-                    this.child(self.render_collapsible_command(
-                        card_header_id.clone(),
-                        true,
-                        tool_call.label.clone(),
-                        window,
-                        cx,
+                    this.child(Self::pulse_while_running(
+                        self.render_collapsible_command(
+                            card_header_id.clone(),
+                            true,
+                            tool_call.label.clone(),
+                            window,
+                            cx,
+                        ),
+                        ("tool-call-command-pulse", entry_ix),
+                        is_running,
                     ))
                 } else {
                     this.child(
@@ -9283,15 +9331,19 @@ impl ThreadView {
                                     .rounded_t(rems_from_px(5_f32))
                                     .bg(self.tool_card_header_bg(cx))
                             })
-                            .child(self.render_tool_call_label(
-                                entry_ix,
-                                tool_call,
-                                is_edit,
-                                is_cancelled_edit,
-                                has_revealed_diff,
-                                use_card_layout,
-                                window,
-                                cx,
+                            .child(Self::pulse_while_running(
+                                self.render_tool_call_label(
+                                    entry_ix,
+                                    tool_call,
+                                    is_edit,
+                                    is_cancelled_edit,
+                                    has_revealed_diff,
+                                    use_card_layout,
+                                    window,
+                                    cx,
+                                ),
+                                ("tool-call-label-pulse", entry_ix),
+                                is_running,
                             ))
                             .child(
                                 h_flex()
