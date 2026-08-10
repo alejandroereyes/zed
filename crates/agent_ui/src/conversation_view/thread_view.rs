@@ -700,6 +700,87 @@ impl ToolCallLayout {
     }
 }
 
+/// A maximal run of two or more consecutive read/search tool calls, rendered as
+/// one collapsible "Explored N" group. `anchor` is the first member's id and is
+/// used as the group's expand-state key; `all_search` picks the "searches" vs
+/// "files" noun.
+struct ExploredRun {
+    start: usize,
+    len: usize,
+    anchor: acp::ToolCallId,
+    all_search: bool,
+}
+
+/// The tool call at `entry`, if it may fold into an exploratory group: a
+/// read/search/fetch call that is neither awaiting confirmation (a permission
+/// prompt must stay a standalone card) nor a subagent invocation.
+fn groupable_tool_call(entry: &AgentThreadEntry) -> Option<&ToolCall> {
+    match entry {
+        AgentThreadEntry::ToolCall(tool_call)
+            if matches!(
+                tool_call.kind,
+                acp::ToolKind::Read | acp::ToolKind::Search | acp::ToolKind::Fetch
+            ) && !matches!(
+                tool_call.status,
+                ToolCallStatus::WaitingForConfirmation { .. }
+            ) && tool_call.subagent_session_info.is_none() =>
+        {
+            Some(tool_call)
+        }
+        _ => None,
+    }
+}
+
+/// The exploratory run covering `index`, or `None` when the entry there is not
+/// groupable or its run is a lone call.
+fn exploratory_run_at(entries: &[AgentThreadEntry], index: usize) -> Option<ExploredRun> {
+    groupable_tool_call(entries.get(index)?)?;
+
+    let mut start = index;
+    while start > 0 && groupable_tool_call(&entries[start - 1]).is_some() {
+        start -= 1;
+    }
+    let mut end = index;
+    while end + 1 < entries.len() && groupable_tool_call(&entries[end + 1]).is_some() {
+        end += 1;
+    }
+
+    let len = end - start + 1;
+    if len < 2 {
+        return None;
+    }
+
+    let anchor = groupable_tool_call(&entries[start])?.id.clone();
+    let all_search = (start..=end).all(|member| {
+        matches!(
+            &entries[member],
+            AgentThreadEntry::ToolCall(tool_call)
+                if matches!(tool_call.kind, acp::ToolKind::Search)
+        )
+    });
+    Some(ExploredRun {
+        start,
+        len,
+        anchor,
+        all_search,
+    })
+}
+
+/// Whether any member of the run is still running, so the header animates and
+/// reads "Exploring N…" instead of a settled "Explored N …".
+fn exploratory_run_is_live(entries: &[AgentThreadEntry], run: &ExploredRun) -> bool {
+    (run.start..run.start + run.len).any(|member| {
+        matches!(
+            &entries[member],
+            AgentThreadEntry::ToolCall(tool_call)
+                if matches!(
+                    tool_call.status,
+                    ToolCallStatus::Pending | ToolCallStatus::InProgress
+                )
+        )
+    })
+}
+
 fn full_path_for_empty_project_path(file: &dyn language::File, cx: &App) -> Option<String> {
     if file.path().file_name().is_some() {
         return None;
@@ -4078,6 +4159,75 @@ impl ThreadView {
         cx.notify();
     }
 
+    fn toggle_tool_group_expansion(
+        &mut self,
+        anchor: &acp::ToolCallId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.entry_view_state.update(cx, |state, _cx| {
+            state.toggle_tool_group_expansion(anchor);
+        });
+        self.refresh_thread_search(window, cx);
+        cx.notify();
+    }
+
+    /// The clickable header row for an exploratory group. When the run is still
+    /// live the label reads "Exploring N…" and pulses; once settled it reads
+    /// "Explored N files"/"Explored N searches". The per-tool cards are rendered
+    /// on the following rows when `expanded` (see the ToolCall arm of
+    /// `render_entry`), so this row is header-only.
+    fn render_explored_group_header(
+        &self,
+        anchor: acp::ToolCallId,
+        count: usize,
+        all_search: bool,
+        is_live: bool,
+        expanded: bool,
+        cx: &Context<Self>,
+    ) -> Stateful<Div> {
+        let label_text = if is_live {
+            format!("Exploring {count}…")
+        } else if all_search {
+            format!("Explored {count} searches")
+        } else {
+            format!("Explored {count} files")
+        };
+
+        let label = Label::new(label_text)
+            .color(Color::Custom(cx.theme().colors().text.opacity(0.6)))
+            .size(LabelSize::Small);
+
+        h_flex()
+            .id(SharedString::from(format!("explored-group-{}", anchor.0)))
+            .group("explored-group-header")
+            .w_full()
+            .p_1()
+            .gap_1p5()
+            .cursor_pointer()
+            .tab_index(0)
+            .map(|this| {
+                if is_live {
+                    this.child(label.with_animation(
+                        "explored-group-label",
+                        Animation::new(Duration::from_secs(1))
+                            .repeat()
+                            .with_easing(pulsating_between(0.6, 1.0)),
+                        |label, delta| label.alpha(delta),
+                    ))
+                } else {
+                    this.child(label)
+                }
+            })
+            .child(
+                Disclosure::new("explored-group-disclosure", expanded)
+                    .visible_on_hover("explored-group-header"),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.toggle_tool_group_expansion(&anchor, window, cx);
+            }))
+    }
+
     fn render_edits_summary(
         &self,
         changed_buffers: &[(Entity<Buffer>, Entity<BufferDiff>)],
@@ -6405,6 +6555,54 @@ impl ThreadView {
                     if !has_visible_content {
                         return Empty.into_any();
                     }
+                }
+
+                // Fold a run of consecutive read/search calls into one "Explored
+                // N" group: the first member renders the disclosure header (plus
+                // its own card when expanded), later members render as embedded
+                // cards when expanded and are hidden when collapsed.
+                let entries = self.thread.read(cx).entries();
+                if let Some(run) = exploratory_run_at(entries, entry_ix) {
+                    let expanded = self
+                        .entry_view_state
+                        .read(cx)
+                        .is_tool_group_expanded(&run.anchor);
+                    let is_first = entry_ix == run.start;
+                    if !is_first && !expanded {
+                        return Empty.into_any();
+                    }
+
+                    let is_live = exploratory_run_is_live(entries, &run);
+                    let child = expanded.then(|| {
+                        self.render_any_tool_call(
+                            self.thread.read(cx).session_id(),
+                            entry_ix,
+                            tool_call,
+                            &self.focus_handle(cx),
+                            ToolCallLayout::Embedded,
+                            window,
+                            cx,
+                        )
+                    });
+
+                    if is_first {
+                        return v_flex()
+                            .w_full()
+                            .child(self.render_explored_group_header(
+                                run.anchor.clone(),
+                                run.len,
+                                run.all_search,
+                                is_live,
+                                expanded,
+                                cx,
+                            ))
+                            .children(child)
+                            .into_any();
+                    }
+
+                    return child
+                        .map(|card| card.into_any())
+                        .unwrap_or_else(|| Empty.into_any());
                 }
 
                 let tool_call = self.render_any_tool_call(
