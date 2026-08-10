@@ -8527,6 +8527,232 @@ impl ThreadView {
             })
     }
 
+    /// A compact "Created Plan" card: title + one-line summary, with a "View Plan"
+    /// button (opens the plan markdown file) and — when the agent supplied a build
+    /// policy in the card meta — a "Build" button that enters the policy's session
+    /// mode and sends its prompt. The renderer carries no execution policy itself.
+    fn render_plan_card(
+        &self,
+        entry_ix: usize,
+        plan_card: &acp_thread::PlanCardInfo,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let title = plan_card
+            .title
+            .clone()
+            .unwrap_or_else(|| "Plan".to_string());
+        let summary = plan_card.summary.clone();
+        let plan_path = plan_card.path.clone();
+        let plan_file_name = std::path::Path::new(&plan_card.path)
+            .file_name()
+            .map(|file_name| file_name.to_string_lossy().to_string());
+        let todos_label = plan_card.todos_total.map(|total| {
+            if total == 1 {
+                "1 to-do".to_string()
+            } else {
+                format!("{total} to-dos")
+            }
+        });
+        // Build drives a mode switch through the connection (session modes or the
+        // "mode" config option, whichever the agent exposes), so it isn't gated on a
+        // mode_selector — external agents that use config options have none.
+        let build_info = if self.is_subagent() {
+            None
+        } else {
+            plan_card.build.clone()
+        };
+
+        v_flex()
+            .w_full()
+            .rounded_md()
+            .border_1()
+            .border_color(self.tool_card_border_color(cx))
+            .overflow_hidden()
+            .child(
+                h_flex()
+                    .px_2()
+                    .py_1()
+                    .gap_1p5()
+                    .justify_between()
+                    .bg(self.tool_card_header_bg(cx))
+                    .border_b_1()
+                    .border_color(self.tool_card_border_color(cx))
+                    .child(
+                        h_flex()
+                            .gap_1p5()
+                            .child(
+                                Icon::new(IconName::File)
+                                    .size(IconSize::Small)
+                                    .color(Color::Muted),
+                            )
+                            .child(
+                                Label::new("Created Plan")
+                                    .size(LabelSize::Small)
+                                    .color(Color::Custom(cx.theme().colors().text.opacity(0.6))),
+                            ),
+                    )
+                    .when_some(plan_file_name, |this, plan_file_name| {
+                        this.child(
+                            div()
+                                .px_1p5()
+                                .rounded_full()
+                                .bg(cx.theme().colors().element_background)
+                                .border_1()
+                                .border_color(cx.theme().colors().border_variant)
+                                .child(
+                                    Label::new(plan_file_name)
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Custom(
+                                            cx.theme().colors().text.opacity(0.36),
+                                        ))
+                                        .buffer_font(cx)
+                                        .truncate(),
+                                ),
+                        )
+                    }),
+            )
+            .child(
+                v_flex()
+                    .p_2()
+                    .gap_1()
+                    .child(
+                        Label::new(title)
+                            .size(LabelSize::Custom(self.tool_name_font_size()))
+                            .weight(gpui::FontWeight::SEMIBOLD)
+                            .truncate(),
+                    )
+                    .when_some(summary, |this, summary| {
+                        this.child(
+                            div()
+                                .text_size(ui::TextSize::Small.rems(cx))
+                                .text_color(cx.theme().colors().text.opacity(0.6))
+                                .line_clamp(2)
+                                .child(summary),
+                        )
+                    })
+                    .child(
+                        h_flex()
+                            .mt_1()
+                            .gap_1()
+                            .justify_between()
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .when_some(todos_label, |this, todos_label| {
+                                        this.child(
+                                            Icon::new(IconName::ListTodo)
+                                                .size(IconSize::Small)
+                                                .color(Color::Muted),
+                                        )
+                                        .child(
+                                            Label::new(todos_label)
+                                                .size(LabelSize::Small)
+                                                .color(Color::Muted),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .child(
+                                        Button::new(("view-plan", entry_ix), "View Plan")
+                                            .label_size(LabelSize::Small)
+                                            .color(Color::Muted)
+                                            .on_click(cx.listener(
+                                                move |this, _event: &ClickEvent, window, cx| {
+                                                    let path =
+                                                        std::path::PathBuf::from(plan_path.clone());
+                                                    let _ = this.workspace.update(
+                                                        cx,
+                                                        |workspace, cx| {
+                                                            workspace
+                                                                .open_abs_path(
+                                                                    path,
+                                                                    OpenOptions {
+                                                                        focus: Some(true),
+                                                                        ..Default::default()
+                                                                    },
+                                                                    window,
+                                                                    cx,
+                                                                )
+                                                                .detach();
+                                                        },
+                                                    );
+                                                },
+                                            )),
+                                    )
+                                    .when_some(build_info, |this, build_info| {
+                                        this.child(
+                                            Button::new(("build-plan", entry_ix), "Build")
+                                                .label_size(LabelSize::Small)
+                                                .style(ButtonStyle::Tinted(ui::TintColor::Accent))
+                                                .on_click(cx.listener(
+                                                    move |this, _event: &ClickEvent, window, cx| {
+                                                        let thread = this.thread.read(cx);
+                                                        let session_id =
+                                                            thread.session_id().clone();
+                                                        let connection =
+                                                            thread.connection().clone();
+                                                        // Enter the mode the agent's build policy names, if
+                                                        // any. Prefer ACP session modes; fall back to the
+                                                        // "mode" config option (external config-option
+                                                        // agents advertise no session modes).
+                                                        if let Some(mode_id) = &build_info.mode_id {
+                                                            if let Some(modes) = connection
+                                                                .session_modes(&session_id, cx)
+                                                            {
+                                                                modes
+                                                                    .set_mode(
+                                                                        acp::SessionModeId::new(
+                                                                            mode_id.as_str(),
+                                                                        ),
+                                                                        cx,
+                                                                    )
+                                                                    .detach();
+                                                            } else if let Some(options) =
+                                                                connection.session_config_options(
+                                                                    &session_id,
+                                                                    cx,
+                                                                )
+                                                            {
+                                                                options
+                                                                    .set_config_option(
+                                                                        acp::SessionConfigId::new(
+                                                                            "mode",
+                                                                        ),
+                                                                        acp::SessionConfigOptionValue::value_id(
+                                                                            mode_id.clone(),
+                                                                        ),
+                                                                        cx,
+                                                                    )
+                                                                    .detach();
+                                                            }
+                                                        }
+                                                        let contents =
+                                                            vec![acp::ContentBlock::Text(
+                                                                acp::TextContent::new(
+                                                                    build_info.prompt.clone(),
+                                                                ),
+                                                            )];
+                                                        this.send_content(
+                                                            Task::ready(Ok(Some((
+                                                                contents,
+                                                                Vec::new(),
+                                                            )))),
+                                                            false,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                )),
+                                        )
+                                    }),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn render_any_tool_call(
         &self,
         active_session_id: &acp::SessionId,
@@ -8552,7 +8778,15 @@ impl ThreadView {
         )));
 
         div().w_full().id(container_id).map(|this| {
-            if tool_call.is_subagent() {
+            if let Some(plan_card) = tool_call.plan_card.clone() {
+                // Inset the bordered card so it doesn't sit flush against the
+                // panel edges (standalone tool entries render edge-to-edge).
+                this.child(
+                    div()
+                        .px_2()
+                        .child(self.render_plan_card(entry_ix, &plan_card, cx)),
+                )
+            } else if tool_call.is_subagent() {
                 this.child(
                     self.render_subagent_tool_call(
                         active_session_id,
