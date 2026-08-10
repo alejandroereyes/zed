@@ -52,6 +52,9 @@ pub struct EntryViewState {
     // group. The group is keyed by its first member's tool-call id (the anchor);
     // presence here means the group is expanded to show the per-tool cards.
     expanded_tool_groups: HashSet<acp::ToolCallId>,
+    // Completed turns collapsed by the user, keyed by the turn's first
+    // assistant-entry index; presence hides the turn's intermediate work.
+    collapsed_turns: HashSet<usize>,
 }
 
 impl EntryViewState {
@@ -75,6 +78,7 @@ impl EntryViewState {
             expanded_compactions: HashSet::default(),
             expanded_tool_calls: HashSet::default(),
             expanded_tool_groups: HashSet::default(),
+            collapsed_turns: HashSet::default(),
         }
     }
 
@@ -89,6 +93,16 @@ impl EntryViewState {
     pub(crate) fn toggle_tool_group_expansion(&mut self, anchor: &acp::ToolCallId) {
         if !self.expanded_tool_groups.remove(anchor) {
             self.expanded_tool_groups.insert(anchor.clone());
+        }
+    }
+
+    pub(crate) fn is_turn_collapsed(&self, boundary: usize) -> bool {
+        self.collapsed_turns.contains(&boundary)
+    }
+
+    pub(crate) fn toggle_turn_collapse(&mut self, boundary: usize) {
+        if !self.collapsed_turns.remove(&boundary) {
+            self.collapsed_turns.insert(boundary);
         }
     }
 

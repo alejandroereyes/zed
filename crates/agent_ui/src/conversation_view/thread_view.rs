@@ -714,6 +714,56 @@ struct ExploredRun {
 /// The tool call at `entry`, if it may fold into an exploratory group: a
 /// read/search/fetch call that is neither awaiting confirmation (a permission
 /// prompt must stay a standalone card) nor a subagent invocation.
+/// True when `index` is the first entry of a turn's assistant work (the entry
+/// right after a user message, or the very first entry of the thread).
+fn is_turn_start(entries: &[AgentThreadEntry], index: usize) -> bool {
+    match entries.get(index) {
+        None | Some(AgentThreadEntry::UserMessage(_)) => false,
+        Some(_) => match index.checked_sub(1) {
+            None => true,
+            Some(prev) => matches!(entries.get(prev), Some(AgentThreadEntry::UserMessage(_))),
+        },
+    }
+}
+
+/// Zero-based index of the turn that `index` belongs to, for indexing into
+/// `completed_turn_durations()` (ordered by turn completion).
+fn turn_ordinal(entries: &[AgentThreadEntry], index: usize) -> usize {
+    entries
+        .iter()
+        .take(index + 1)
+        .filter(|entry| matches!(entry, AgentThreadEntry::UserMessage(_)))
+        .count()
+        .saturating_sub(1)
+}
+
+/// The first assistant-entry index of the turn containing `index` (the entry the
+/// "Worked for" header renders on). None for a user message.
+fn turn_boundary_of(entries: &[AgentThreadEntry], index: usize) -> Option<usize> {
+    if matches!(entries.get(index)?, AgentThreadEntry::UserMessage(_)) {
+        return None;
+    }
+    let mut boundary = index;
+    while boundary > 0 && !matches!(entries[boundary - 1], AgentThreadEntry::UserMessage(_)) {
+        boundary -= 1;
+    }
+    Some(boundary)
+}
+
+/// The last assistant-message entry of the turn starting at `boundary` — kept
+/// visible when the turn is collapsed.
+fn turn_last_assistant(entries: &[AgentThreadEntry], boundary: usize) -> Option<usize> {
+    let mut last = None;
+    let mut index = boundary;
+    while index < entries.len() && !matches!(entries[index], AgentThreadEntry::UserMessage(_)) {
+        if matches!(entries[index], AgentThreadEntry::AssistantMessage(_)) {
+            last = Some(index);
+        }
+        index += 1;
+    }
+    last
+}
+
 fn groupable_tool_call(entry: &AgentThreadEntry) -> Option<&ToolCall> {
     match entry {
         AgentThreadEntry::ToolCall(tool_call)
@@ -4172,6 +4222,14 @@ impl ThreadView {
         cx.notify();
     }
 
+    fn toggle_turn_collapse(&mut self, boundary: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.entry_view_state.update(cx, |state, _cx| {
+            state.toggle_turn_collapse(boundary);
+        });
+        self.refresh_thread_search(window, cx);
+        cx.notify();
+    }
+
     /// The clickable header row for an exploratory group. When the run is still
     /// live the label reads "Exploring N…" and pulses; once settled it reads
     /// "Explored N files"/"Explored N searches". The per-tool cards are rendered
@@ -6275,6 +6333,24 @@ impl ThreadView {
         window: &Window,
         cx: &Context<Self>,
     ) -> AnyElement {
+        // Hide a collapsed, completed turn's intermediate entries; the "Worked
+        // for" header stays on the boundary and the final answer stays visible.
+        {
+            let thread = self.thread.read(cx);
+            let entries = thread.entries();
+            if let Some(boundary) = turn_boundary_of(entries, entry_ix)
+                && boundary != entry_ix
+                && Some(entry_ix) != turn_last_assistant(entries, boundary)
+                && thread
+                    .completed_turn_durations()
+                    .get(turn_ordinal(entries, boundary))
+                    .is_some()
+                && self.entry_view_state.read(cx).is_turn_collapsed(boundary)
+            {
+                return Empty.into_any_element();
+            }
+        }
+
         let is_indented = entry.is_indented();
         let is_first_indented = is_indented
             && self
@@ -6698,6 +6774,57 @@ impl ThreadView {
                 .into_any_element()
         } else {
             primary
+        };
+
+        // "Worked for {duration}" turn rollup: a muted, small, collapsible header
+        // above a completed turn's assistant work. Collapsing hides the turn's
+        // intermediate entries (see the early return above); the final answer stays.
+        let primary = {
+            let (worked_for, collapsed, keep_visible) = {
+                let thread = self.thread.read(cx);
+                let entries = thread.entries();
+                if is_turn_start(entries, entry_ix) {
+                    let duration = thread
+                        .completed_turn_durations()
+                        .get(turn_ordinal(entries, entry_ix))
+                        .copied();
+                    let collapsed = self.entry_view_state.read(cx).is_turn_collapsed(entry_ix);
+                    let keep_visible = Some(entry_ix) == turn_last_assistant(entries, entry_ix);
+                    (duration, collapsed, keep_visible)
+                } else {
+                    (None, false, false)
+                }
+            };
+            if let Some(duration) = worked_for {
+                let header = h_flex()
+                    .id(SharedString::from(format!("worked-for-turn-{entry_ix}")))
+                    .group("worked-for-header")
+                    .w_full()
+                    .px_5()
+                    .py_1()
+                    .gap_1p5()
+                    .cursor_pointer()
+                    .tab_index(0)
+                    .child(
+                        Label::new(format!("Worked for {}", duration_alt_display(duration)))
+                            .size(LabelSize::Small)
+                            .color(Color::Custom(cx.theme().colors().text.opacity(0.6))),
+                    )
+                    .child(
+                        Disclosure::new("worked-for-disclosure", !collapsed)
+                            .visible_on_hover("worked-for-header"),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.toggle_turn_collapse(entry_ix, window, cx);
+                    }));
+                v_flex()
+                    .w_full()
+                    .child(header)
+                    .children((!collapsed || keep_visible).then_some(primary))
+                    .into_any_element()
+            } else {
+                primary
+            }
         };
 
         let thread = self.thread.clone();
