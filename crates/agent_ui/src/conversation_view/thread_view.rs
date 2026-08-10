@@ -55,6 +55,34 @@ use super::*;
 
 const DATA_RETENTION_LEARN_MORE_URL: &str = "https://support.claude.com/en/articles/15425996-data-retention-practices-for-mythos-class-models";
 
+const TOOL_HOVER_PREVIEW_MAX_CHARS: usize = 2000;
+
+/// Result preview shown when hovering a search or fetch row, whose result is
+/// otherwise not rendered in the transcript.
+struct ToolResultHoverPreview {
+    text: SharedString,
+}
+
+impl Render for ToolResultHoverPreview {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .w(px(360.))
+            .max_h(px(280.))
+            .overflow_hidden()
+            .p_2()
+            .rounded_md()
+            .border_1()
+            .border_color(cx.theme().colors().border)
+            .bg(cx.theme().colors().elevated_surface_background)
+            .child(
+                Label::new(self.text.clone())
+                    .buffer_font(cx)
+                    .size(LabelSize::XSmall)
+                    .color(Color::Muted),
+            )
+    }
+}
+
 #[derive(Default)]
 struct ThreadFeedbackState {
     feedback: Option<ThreadFeedback>,
@@ -10905,7 +10933,28 @@ impl ThreadView {
                     }))
                     .into_any_element()
             } else {
+                let hover_preview = matches!(
+                    tool_call.kind,
+                    acp::ToolKind::Search | acp::ToolKind::Fetch
+                )
+                .then(|| {
+                    tool_call.content.iter().find_map(|content| match content {
+                        ToolCallContent::ContentBlock(block) => block
+                            .text_content(cx)
+                            .map(|text| text.trim())
+                            .filter(|text| !text.is_empty())
+                            .map(|text| {
+                                SharedString::from(
+                                    text.chars().take(TOOL_HOVER_PREVIEW_MAX_CHARS).collect::<String>(),
+                                )
+                            }),
+                        _ => None,
+                    })
+                })
+                .flatten();
+
                 h_flex()
+                    .id(("tool-call-row", entry_ix))
                     .w_full()
                     .map(|this| {
                         if let Some(two_tier_label) = two_tier_label {
@@ -10919,6 +10968,12 @@ impl ThreadView {
                                 ),
                             )
                         }
+                    })
+                    .when_some(hover_preview, |this, text| {
+                        this.hoverable_tooltip(move |_window, cx| {
+                            cx.new(|_| ToolResultHoverPreview { text: text.clone() })
+                                .into()
+                        })
                     })
                     .into_any()
             })
