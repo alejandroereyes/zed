@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use gpui::{AnyElement, ClickEvent, CursorStyle, Window};
-use ui::{CommonAnimationExt, Disclosure, Divider, DividerColor, Tooltip, prelude::*};
+use ui::{CommonAnimationExt, Divider, DividerColor, Tooltip, prelude::*};
 use util::time::duration_alt_display;
 
 const ELAPSED_DISPLAY_THRESHOLD: Duration = Duration::from_secs(10);
@@ -18,7 +18,8 @@ pub struct TerminalSandboxWarning {
 pub struct TerminalToolHeader {
     id: SharedString,
     hover_group: SharedString,
-    working_dir: SharedString,
+    working_dir: Option<SharedString>,
+    command_summary: Option<SharedString>,
     is_expanded: bool,
     elapsed: Option<Duration>,
     running: bool,
@@ -35,13 +36,13 @@ impl TerminalToolHeader {
     pub fn new(
         id: impl Into<SharedString>,
         hover_group: impl Into<SharedString>,
-        working_dir: impl Into<SharedString>,
         is_expanded: bool,
     ) -> Self {
         Self {
             id: id.into(),
             hover_group: hover_group.into(),
-            working_dir: working_dir.into(),
+            working_dir: None,
+            command_summary: None,
             is_expanded,
             elapsed: None,
             running: false,
@@ -53,6 +54,20 @@ impl TerminalToolHeader {
             on_stop: None,
             command_slot: None,
         }
+    }
+
+    /// A real path only; when absent the header omits the directory row
+    /// entirely instead of labeling every card with a placeholder.
+    pub fn working_dir(mut self, working_dir: impl Into<SharedString>) -> Self {
+        self.working_dir = Some(working_dir.into());
+        self
+    }
+
+    /// Compact identity for the collapsed card, e.g. `cargo, 2+` — the
+    /// leading command plus how many more are chained after it.
+    pub fn command_summary(mut self, summary: impl Into<SharedString>) -> Self {
+        self.command_summary = Some(summary.into());
+        self
     }
 
     pub fn elapsed(mut self, elapsed: Duration) -> Self {
@@ -103,6 +118,113 @@ impl TerminalToolHeader {
     }
 }
 
+/// Five lines of output plus a line of breathing room.
+pub const COLLAPSED_OUTPUT_PREVIEW_HEIGHT: Pixels = px(86.);
+
+/// The tail of a command's output, plus whether anything was dropped above it.
+pub fn collapsed_output_preview(content: &str) -> Option<(String, bool)> {
+    const MAX_LINES: usize = 5;
+    const MAX_CHARS: usize = 2000;
+
+    let trimmed = content.trim_end();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lines: Vec<&str> = trimmed.lines().collect();
+    let first_kept = lines.len().saturating_sub(MAX_LINES);
+    let mut hidden = first_kept > 0;
+    let mut tail = lines[first_kept..].join("\n");
+
+    let char_count = tail.chars().count();
+    if char_count > MAX_CHARS {
+        tail = tail.chars().skip(char_count - MAX_CHARS).collect();
+        hidden = true;
+    }
+
+    Some((tail, hidden))
+}
+
+/// `cargo, ls` for `cargo build && cargo test; ls` — the distinct programs the
+/// command line invokes, in the order they appear.
+pub fn command_summary_chip(command: &str) -> Option<String> {
+    const MAX_NAMES: usize = 5;
+
+    let mut names: Vec<&str> = Vec::new();
+    for segment in command
+        .split(['\n', ';', '|'])
+        .flat_map(|segment| segment.split("&&"))
+        .flat_map(|segment| segment.split("||"))
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+    {
+        let Some(program) = segment.split_whitespace().next() else {
+            continue;
+        };
+        if !names.contains(&program) {
+            names.push(program);
+        }
+    }
+
+    if names.is_empty() {
+        return None;
+    }
+    if names.len() > MAX_NAMES {
+        let hidden = names.len() - MAX_NAMES;
+        names.truncate(MAX_NAMES);
+        Some(format!("{} +{hidden}", names.join(", ")))
+    } else {
+        Some(names.join(", "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_summary_chip_lists_distinct_programs() {
+        assert_eq!(
+            command_summary_chip("cargo build && cargo test; ls").as_deref(),
+            Some("cargo, ls")
+        );
+        assert_eq!(command_summary_chip("ls -la").as_deref(), Some("ls"));
+        assert_eq!(
+            command_summary_chip("cd /repo && grep -rn foo | head -5").as_deref(),
+            Some("cd, grep, head")
+        );
+        assert_eq!(
+            command_summary_chip("brew info --json | python3 -c 'x'").as_deref(),
+            Some("brew, python3")
+        );
+        assert_eq!(command_summary_chip("a; b || c").as_deref(), Some("a, b, c"));
+        assert_eq!(
+            command_summary_chip("a; b; c; d; e; f; g").as_deref(),
+            Some("a, b, c, d, e +2")
+        );
+        assert_eq!(command_summary_chip("   "), None);
+    }
+
+    #[test]
+    fn collapsed_output_preview_keeps_the_tail() {
+        assert_eq!(
+            collapsed_output_preview("one\ntwo\nthree"),
+            Some(("one\ntwo\nthree".to_string(), false))
+        );
+        assert_eq!(
+            collapsed_output_preview("1\n2\n3\n4\n5\n6\n7"),
+            Some(("3\n4\n5\n6\n7".to_string(), true))
+        );
+        assert_eq!(collapsed_output_preview("  \n \n"), None);
+        assert_eq!(collapsed_output_preview(""), None);
+
+        let long = "x".repeat(2500);
+        let (preview, hidden) = collapsed_output_preview(&long).unwrap();
+        assert_eq!(preview.chars().count(), 2000);
+        assert!(hidden);
+    }
+}
+
 impl RenderOnce for TerminalToolHeader {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let show_elapsed = self
@@ -113,6 +235,7 @@ impl RenderOnce for TerminalToolHeader {
             id,
             hover_group,
             working_dir,
+            command_summary,
             is_expanded,
             elapsed,
             running,
@@ -133,6 +256,38 @@ impl RenderOnce for TerminalToolHeader {
             .element_background
             .blend(cx.theme().colors().editor_foreground.opacity(0.025));
 
+        let leading_icon = div()
+            .relative()
+            .size(IconSize::Small.rems())
+            .flex_none()
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .group_hover(&hover_group, |this| this.invisible())
+                    .child(
+                        Icon::new(IconName::ToolTerminal)
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
+                    ),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .invisible()
+                    .group_hover(&hover_group, |this| this.visible())
+                    .child(
+                        Icon::new(if is_expanded {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .size(IconSize::Small)
+                        .color(Color::Muted),
+                    ),
+            );
+
         let header_row = h_flex()
             .id(child_id("header"))
             .pt_1()
@@ -142,21 +297,28 @@ impl RenderOnce for TerminalToolHeader {
             .gap_1()
             .justify_between()
             .rounded_t_md()
+            .when_some(on_toggle_expand, |this, handler| {
+                this.cursor_pointer()
+                    .tab_index(0)
+                    .hover(|style| style.bg(header_bg))
+                    .on_click(handler)
+            })
             .child(
-                div().w_full().min_w_0().overflow_hidden().child(
-                    Label::new(working_dir)
-                        .buffer_font(cx)
-                        .size(LabelSize::XSmall)
-                        .color(Color::Muted)
-                        .truncate_start(),
-                ),
-            )
-            .child(
-                Disclosure::new(child_id("disclosure"), is_expanded)
-                    .opened_icon(IconName::ChevronUp)
-                    .closed_icon(IconName::ChevronDown)
-                    .visible_on_hover(&hover_group)
-                    .when_some(on_toggle_expand, |this, handler| this.on_click(handler)),
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_1p5()
+                    .overflow_hidden()
+                    .child(leading_icon)
+                    .when_some(command_summary, |this, summary| {
+                        this.child(
+                            Label::new(summary)
+                                .buffer_font(cx)
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted)
+                                .truncate(),
+                        )
+                    }),
             )
             .when(show_elapsed, |header| {
                 let elapsed = elapsed.unwrap_or_default();
@@ -241,9 +403,22 @@ impl RenderOnce for TerminalToolHeader {
         v_flex()
             .group(hover_group)
             .text_xs()
-            .bg(header_bg)
+            .when(is_expanded, |this| this.bg(header_bg))
             .child(header_row)
-            .children(command_slot)
+            // The collapsed card is just the identity row; the directory and
+            // the command itself belong to the expanded view.
+            .when(is_expanded, |this| {
+                this.children(working_dir.map(|working_dir| {
+                    div().px_1p5().min_w_0().overflow_hidden().child(
+                        Label::new(working_dir)
+                            .buffer_font(cx)
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted)
+                            .truncate_start(),
+                    )
+                }))
+                .children(command_slot)
+            })
     }
 }
 
@@ -295,12 +470,9 @@ impl Component for TerminalToolHeader {
                     "Running",
                     card(
                         "running",
-                        TerminalToolHeader::new(
-                            "running",
-                            "preview-terminal-header-group-running",
-                            working_dir,
-                            false,
-                        )
+                        TerminalToolHeader::new("running", "preview-terminal-header-group-running", false)
+                        .working_dir(working_dir)
+                        .command_summary("cargo, 1+")
                         .running(true),
                     ),
                 ),
@@ -308,12 +480,9 @@ impl Component for TerminalToolHeader {
                     "Finished (long-running)",
                     card(
                         "elapsed",
-                        TerminalToolHeader::new(
-                            "elapsed",
-                            "preview-terminal-header-group-elapsed",
-                            working_dir,
-                            false,
-                        )
+                        TerminalToolHeader::new("elapsed", "preview-terminal-header-group-elapsed", false)
+                        .working_dir(working_dir)
+                        .command_summary("cargo, 1+")
                         .elapsed(Duration::from_secs(83)),
                     ),
                 ),
@@ -321,12 +490,9 @@ impl Component for TerminalToolHeader {
                     "Truncated output",
                     card(
                         "truncated",
-                        TerminalToolHeader::new(
-                            "truncated",
-                            "preview-terminal-header-group-truncated",
-                            working_dir,
-                            true,
-                        )
+                        TerminalToolHeader::new("truncated", "preview-terminal-header-group-truncated", true)
+                        .working_dir(working_dir)
+                        .command_summary("cargo, 1+")
                         .truncated(
                             "Output is 2.5 MB long, and to avoid unexpected token \
                                      usage, only 16 KB was sent back to the agent.",
@@ -337,12 +503,9 @@ impl Component for TerminalToolHeader {
                     "Failed with exit code",
                     card(
                         "failed",
-                        TerminalToolHeader::new(
-                            "failed",
-                            "preview-terminal-header-group-failed",
-                            working_dir,
-                            false,
-                        )
+                        TerminalToolHeader::new("failed", "preview-terminal-header-group-failed", false)
+                        .working_dir(working_dir)
+                        .command_summary("cargo, 1+")
                         .failed(Some(101)),
                     ),
                 ),
@@ -350,12 +513,9 @@ impl Component for TerminalToolHeader {
                     "Ran without sandbox",
                     card(
                         "sandbox",
-                        TerminalToolHeader::new(
-                            "sandbox",
-                            "preview-terminal-header-group-sandbox",
-                            working_dir,
-                            false,
-                        )
+                        TerminalToolHeader::new("sandbox", "preview-terminal-header-group-sandbox", false)
+                        .working_dir(working_dir)
+                        .command_summary("cargo, 1+")
                         .sandbox_warning(sandbox_warning()),
                     ),
                 ),
@@ -368,9 +528,12 @@ impl Component for TerminalToolHeader {
                             TerminalToolHeader::new(
                                 "long-path",
                                 "preview-terminal-header-group-long-path",
+                                true,
+                            )
+                            .working_dir(
                                 "/Users/you/Documents/GitHub/worktrees/some-monorepo/working-tree-three/packages/deeply/nested/service/backend/src",
-                                false,
-                            ),
+                            )
+                            .command_summary("cargo, 1+"),
                         ))
                         .into_any_element(),
                 ),
@@ -378,12 +541,9 @@ impl Component for TerminalToolHeader {
                     "Everything at once",
                     card(
                         "kitchen-sink",
-                        TerminalToolHeader::new(
-                            "kitchen-sink",
-                            "preview-terminal-header-group-kitchen-sink",
-                            working_dir,
-                            true,
-                        )
+                        TerminalToolHeader::new("kitchen-sink", "preview-terminal-header-group-kitchen-sink", true)
+                        .working_dir(working_dir)
+                        .command_summary("cargo, 1+")
                         .elapsed(Duration::from_secs(3671))
                         .truncated("Output was truncated")
                         .failed(Some(1))
